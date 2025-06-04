@@ -3,7 +3,7 @@ local rolibwaita = loadstring(game:HttpGet("https://codeberg.org/Blukez/rolibwai
 
 -- Create the window
 local Window = rolibwaita:NewWindow({
-    Name = "Saber GUI",
+    Name = "ScriptsRBX.Com Saber Simulator",
     Keybind = "RightShift",
     UseCoreGui = true,
     PrintCredits = true
