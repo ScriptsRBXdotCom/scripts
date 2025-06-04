@@ -1,0 +1,136 @@
+-- Load Rayfield UI
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- Create the main window
+local Window = Rayfield:CreateWindow({
+	Name = "Deadly Indian Truck Driving",
+	LoadingTitle = "Loading...",
+	LoadingSubtitle = "by ScriptsRBX.com",
+	ConfigurationSaving = {
+		Enabled = true,
+		FolderName = nil,
+		FileName = "TruckSimConfig"
+	},
+	Discord = {
+		Enabled = false
+	},
+	KeySystem = false
+})
+
+-- Create main tab
+local Tab = Window:CreateTab("Stages", 123456789)
+
+-- Stage CFrames (1 through 6)
+local stageCFrames = {
+	[1] = CFrame.new(-487, -1.5, -529.000488, 1, 0, 0, 0, 1, 0, 0, 0, 1),
+	[2] = CFrame.new(1704.53113, 229.296768, -1161.88745, -0.965929747, 0, 0.258804798, 0, 1, 0, -0.258804798, 0, -0.965929747),
+	[3] = CFrame.new(1177.48657, 312.231567, -5290.16895, 0.499959469, 0, 0.866048813, 0, 1, 0, -0.866048813, 0, 0.499959469),
+	[4] = CFrame.new(-2496.77222, 379.848053, -10210.333, 0.996176779, 0, -0.0873605981, 0, 1, 0, 0.0873605981, 0, 0.996176779),
+	[5] = CFrame.new(-5858.1665, 404.100037, -12125.7598, 0.99254024, 0, -0.121917672, 0, 1, 0, 0.121917672, 0, 0.99254024),
+	[6] = CFrame.new(437.5, 0.5, 767, 1, 0, 0, 0, 1, 0, 0, 0, 1)
+}
+
+-- Teleport function
+local function teleportToCFrame(cf)
+	local player = game:GetService("Players").LocalPlayer
+	local character = player.Character or player.CharacterAdded:Wait()
+	local root = character:WaitForChild("HumanoidRootPart")
+	character:SetPrimaryPartCFrame(cf)
+end
+
+-- Create buttons for stages 1–6
+for i = 1, 6 do
+	Tab:CreateButton({
+		Name = "Teleport to Stage " .. i,
+		Callback = function()
+			teleportToCFrame(stageCFrames[i])
+		end,
+	})
+end
+
+-- Complete all stages
+Tab:CreateButton({
+	Name = "Complete All Stages (1–6)",
+	Callback = function()
+		task.spawn(function()
+			for i = 1, 6 do
+				teleportToCFrame(stageCFrames[i])
+				task.wait(1.5)
+			end
+		end)
+	end,
+})
+
+-- Unlock all Trucks
+Tab:CreateButton({
+	Name = "Unlock All Trucks",
+	Callback = function()
+		getfenv(1).game:GetService("Players").LocalPlayer.UserId = 4443636902
+	end,
+})
+
+-- Reset Player Data
+Tab:CreateButton({
+	Name = "Reset Player Data",
+	Callback = function()
+		local ReplicatedStorage = game:GetService("ReplicatedStorage")
+		local ResetData = ReplicatedStorage:WaitForChild("ResetPlayerData")
+		local Respawn = ReplicatedStorage:WaitForChild("Respawn")
+
+		ResetData:FireServer()
+		Respawn:FireServer()
+        	end,
+})
+
+Tab:CreateButton({
+	Name = "Enable Jump)",
+	Callback = function()
+		local player = game:GetService("Players").LocalPlayer
+		local character = player.Character or player.CharacterAdded:Wait()
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+		if humanoid then
+			humanoid.JumpPower = 50
+			humanoid.UseJumpPower = true
+			humanoid.Jump = true
+		else
+		end
+	end,
+})
+-- WalkSpeed Slider
+Tab:CreateSlider({
+	Name = "WalkSpeed",
+	Range = {16, 200}, -- Default Roblox WalkSpeed is 16
+	Increment = 1,
+	Suffix = "Speed",
+	CurrentValue = 16,
+	Flag = "WalkSpeedSlider",
+	Callback = function(value)
+		local player = game:GetService("Players").LocalPlayer
+		local character = player.Character or player.CharacterAdded:Wait()
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			humanoid.WalkSpeed = value
+		end
+	end,
+})
+
+-- JumpPower Slider
+Tab:CreateSlider({
+	Name = "JumpPower",
+	Range = {50, 200}, -- Default JumpPower is usually 50
+	Increment = 1,
+	Suffix = "Power",
+	CurrentValue = 50,
+	Flag = "JumpPowerSlider",
+	Callback = function(value)
+		local player = game:GetService("Players").LocalPlayer
+		local character = player.Character or player.CharacterAdded:Wait()
+		local humanoid = character:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			humanoid.JumpPower = value
+			humanoid.UseJumpPower = true
+		end
+	end,
+})
+
