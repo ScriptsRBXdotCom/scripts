@@ -1,0 +1,177 @@
+-- Load the rolibwaita UI library
+local rolibwaita = loadstring(game:HttpGet("https://codeberg.org/Blukez/rolibwaita/raw/branch/master/Source.lua"))()
+
+-- Create the window
+local Window = rolibwaita:NewWindow({
+    Name = "Saber GUI",
+    Keybind = "RightShift",
+    UseCoreGui = true,
+    PrintCredits = true
+})
+
+-- Create the tab
+local Tab = Window:NewTab({
+    Name = "Main",
+    Icon = "rbxassetid://1234"
+})
+
+-- Create the section
+local Section = Tab:NewSection({
+    Name = "Auto Farm",
+    Description = "Automation toggles"
+})
+
+-- Services and Remotes
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local rootPart = character:WaitForChild("HumanoidRootPart")
+
+local SwingSaber = ReplicatedStorage:WaitForChild("Events"):WaitForChild("SwingSaber")
+local SellStrength = ReplicatedStorage:WaitForChild("Events"):WaitForChild("SellStrength")
+local UIAction = ReplicatedStorage:WaitForChild("Events"):WaitForChild("UIAction")
+
+-- Toggle: Auto Swing
+local Swinging = false
+Section:NewToggle({
+    Name = "Auto Swing Saber",
+    Description = "Swings saber automatically",
+    CurrentState = false,
+    Callback = function(state)
+        Swinging = state
+        if Swinging then
+            task.spawn(function()
+                while Swinging do
+                    SwingSaber:FireServer()
+                    task.wait(0.1)
+                end
+            end)
+        end
+    end
+})
+
+-- Toggle: Auto Sell
+local AutoSell = false
+Section:NewToggle({
+    Name = "Auto Sell Strength",
+    Description = "Sells strength every 2 seconds",
+    CurrentState = false,
+    Callback = function(state)
+        AutoSell = state
+        if AutoSell then
+            task.spawn(function()
+                while AutoSell do
+                    SellStrength:FireServer()
+                    task.wait(2)
+                end
+            end)
+        end
+    end
+})
+
+-- Toggle: Teleport Crowns to Player (Fixed Loop)
+local AutoPullCrowns = false
+Section:NewToggle({
+    Name = "Teleport Crowns to Player",
+    Description = "Brings crowns to your character",
+    CurrentState = false,
+    Callback = function(state)
+        AutoPullCrowns = state
+        if AutoPullCrowns then
+            task.spawn(function()
+                while AutoPullCrowns do
+                    local character = player.Character or player.CharacterAdded:Wait()
+                    local rootPart = character:FindFirstChild("HumanoidRootPart")
+                    if rootPart then
+                        local crownFolder = workspace:WaitForChild("Gameplay"):WaitForChild("CurrencyPickup"):WaitForChild("CurrencyHolder")
+                        for _, obj in ipairs(crownFolder:GetChildren()) do
+                            if obj.Name == "Crown" and obj:IsA("BasePart") then
+                                obj.CFrame = rootPart.CFrame + Vector3.new(math.random(-5, 5), 2, math.random(-5, 5))
+                            end
+                        end
+                    end
+                    task.wait(1)
+                end
+            end)
+        end
+    end
+})
+
+
+-- Toggle: Auto Buy Weapons
+local AutoBuyWeapons = false
+Section:NewToggle({
+    Name = "Auto Buy Weapons",
+    Description = "Buys all weapons every few seconds",
+    CurrentState = false,
+    Callback = function(state)
+        AutoBuyWeapons = state
+        if AutoBuyWeapons then
+            task.spawn(function()
+                while AutoBuyWeapons do
+                    UIAction:FireServer("BuyAllWeapons")
+                    task.wait(5)
+                end
+            end)
+        end
+    end
+})
+
+-- Toggle: Auto Buy DNAs
+local AutoBuyDNAs = false
+Section:NewToggle({
+    Name = "Auto Buy DNAs",
+    Description = "Buys all DNAs every few seconds",
+    CurrentState = false,
+    Callback = function(state)
+        AutoBuyDNAs = state
+        if AutoBuyDNAs then
+            task.spawn(function()
+                while AutoBuyDNAs do
+                    UIAction:FireServer("BuyAllDNAs")
+                    task.wait(5)
+                end
+            end)
+        end
+    end
+})
+
+-- Toggle: Auto Buy Auras & Pet Auras
+local AutoBuyAuras = false
+Section:NewToggle({
+    Name = "Auto Buy Auras",
+    Description = "Buys all auras and pet auras automatically",
+    CurrentState = false,
+    Callback = function(state)
+        AutoBuyAuras = state
+        if AutoBuyAuras then
+            task.spawn(function()
+                while AutoBuyAuras do
+                    UIAction:FireServer("BuyAllAuras")
+                    UIAction:FireServer("BuyAllPetAuras")
+                    task.wait(5)
+                end
+            end)
+        end
+    end
+})
+
+-- Toggle: Auto Buy Boss Boosts
+local AutoBuyBoosts = false
+Section:NewToggle({
+    Name = "Auto Buy Boss Boosts",
+    Description = "Buys all boss boosts repeatedly",
+    CurrentState = false,
+    Callback = function(state)
+        AutoBuyBoosts = state
+        if AutoBuyBoosts then
+            task.spawn(function()
+                while AutoBuyBoosts do
+                    UIAction:FireServer("BuyAllBossBoosts")
+                    task.wait(5)
+                end
+            end)
+        end
+    end
+})
