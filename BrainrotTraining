@@ -1,0 +1,256 @@
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+    Name = 'Brainrot Training',
+    LoadingTitle = 'Loading Brainrot Script',
+    LoadingSubtitle = 'by ScriptsRBX.Com',
+    ShowText = 'Press K to Toggle UI',
+    Theme = 'Default',
+    ToggleUIKeybind = Enum.KeyCode.K,
+    ConfigurationSaving = {
+        Enabled = true,
+        FolderName = nil,
+        FileName = 'BrainrotTrainingSettings',
+    },
+    Discord = {
+        Enabled = false,
+        Invite = '',
+        RememberJoins = false,
+    },
+    KeySystem = false,
+})
+
+local ReplicatedStorage = game:GetService('ReplicatedStorage')
+local ServerRemoteEvent = ReplicatedStorage.RemoteEvent.ServerRemoteEvent
+
+---------------------------------------
+-- MAIN TAB
+---------------------------------------
+local MainTab = Window:CreateTab('Main', 'server')
+MainTab:CreateSection('Auto Train')
+
+MainTab:CreateButton({
+    Name = 'Start Auto Train',
+    Callback = function()
+        ServerRemoteEvent:FireServer('ChangeAutoState', 'AutoTrain')
+    end,
+})
+
+MainTab:CreateButton({
+    Name = 'Stop Auto Train',
+    Callback = function()
+        ServerRemoteEvent:FireServer('Train', 0)
+    end,
+})
+
+MainTab:CreateSection('Auto Race')
+
+MainTab:CreateButton({
+    Name = 'Start Auto Race',
+    Callback = function()
+        ServerRemoteEvent:FireServer('ChangeAutoState', 'AutoFight')
+    end,
+})
+
+MainTab:CreateButton({
+    Name = 'Stop Auto Race',
+    Callback = function()
+        ServerRemoteEvent:FireServer('ChangeAutoState', 'Free')
+    end,
+})
+
+MainTab:CreateSection('Codes')
+
+MainTab:CreateButton({
+    Name = 'Redeem All Codes',
+    Callback = function()
+        local codes = { 'RELEASE', 'SPINX5', 'UPDATE' }
+        for _, code in ipairs(codes) do
+            pcall(function()
+                ServerRemoteEvent:FireServer('GetCode', code)
+                print('Redeemed:', code)
+            end)
+            task.wait(1)
+        end
+    end,
+})
+
+---------------------------------------
+-- REBIRTH TAB
+---------------------------------------
+local RebirthTab = Window:CreateTab('Rebirths', 'repeat')
+RebirthTab:CreateSection('Auto Rebirth')
+
+local selectedRebirthTier = 1
+local tierOptions = {}
+for i = 1, 20 do
+    table.insert(tierOptions, tostring(i))
+end
+
+RebirthTab:CreateDropdown({
+    Name = 'Select Rebirth Tier (1–20)',
+    Options = tierOptions,
+    CurrentOption = '1',
+    Callback = function(Value)
+        local selected = type(Value) == 'table' and Value[1] or Value
+        local number = tonumber(selected)
+        if number and number >= 1 and number <= 20 then
+            selectedRebirthTier = number
+            print('Selected Rebirth Tier:', number)
+        else
+            selectedRebirthTier = 1
+        end
+    end,
+})
+
+local autoRebirthEnabled = false
+RebirthTab:CreateToggle({
+    Name = 'Auto Rebirth',
+    CurrentValue = false,
+    Callback = function(Value)
+        autoRebirthEnabled = Value
+    end,
+})
+
+task.spawn(function()
+    while true do
+        if autoRebirthEnabled and selectedRebirthTier then
+            pcall(function()
+                ServerRemoteEvent:FireServer('Rebirth', selectedRebirthTier)
+            end)
+        end
+        task.wait(0.5)
+    end
+end)
+
+---------------------------------------
+-- UPGRADES TAB
+---------------------------------------
+local UpgradesTab = Window:CreateTab('Upgrades', 'settings')
+UpgradesTab:CreateSection('Auto Upgrades')
+
+local upgrades = {
+    {
+        name = 'Auto Upgrade Rebirth',
+        toggleVar = false,
+        stringId = '\228\186\186\231\137\169\229\141\135\231\186\167_\233\135\141\231\148\159\230\172\161\230\149\176\231\173\137\231\186\167',
+    },
+    {
+        name = 'Auto Pet Equip Upgrade',
+        toggleVar = false,
+        stringId = '\228\186\186\231\137\169\229\141\135\231\186\167_\229\174\160\231\137\169\232\163\133\229\164\135\230\149\176\233\135\143',
+    },
+    {
+        name = 'Auto Coins Boost',
+        toggleVar = false,
+        stringId = '\228\186\186\231\137\169\229\141\135\231\186\167_\233\135\145\229\184\129',
+    },
+    {
+        name = 'Auto Train Boost',
+        toggleVar = false,
+        stringId = '\228\186\186\231\137\169\229\141\135\231\186\167_\229\138\155\233\135\143',
+    },
+    {
+        name = 'Auto Luck Boost',
+        toggleVar = false,
+        stringId = '\228\186\186\231\137\169\229\141\135\231\186\167_\229\185\184\232\191\144',
+    },
+}
+
+for _, upgrade in ipairs(upgrades) do
+    UpgradesTab:CreateToggle({
+        Name = upgrade.name,
+        CurrentValue = false,
+        Callback = function(Value)
+            upgrade.toggleVar = Value
+        end,
+    })
+end
+
+task.spawn(function()
+    while true do
+        for _, upgrade in ipairs(upgrades) do
+            if upgrade.toggleVar then
+                pcall(function()
+                    ServerRemoteEvent:FireServer(
+                        'Business',
+                        upgrade.stringId,
+                        0,
+                        0
+                    )
+                end)
+            end
+        end
+        task.wait(1)
+    end
+end)
+
+local EggsTab = Window:CreateTab('Eggs', 'package')
+EggsTab:CreateSection('Auto Open Eggs')
+
+local autoEgg1 = false
+local autoEgg2 = false
+local autoEgg3 = false
+local autoEgg4 = false
+
+local function openEgg(eggId)
+    pcall(function()
+        ServerRemoteEvent:FireServer('ShowOpenUniversalEgg', eggId, 1, {
+            false,
+            false,
+            false,
+            false,
+            false,
+        })
+    end)
+end
+
+EggsTab:CreateToggle({
+    Name = 'Auto Open Egg 1 (10 Trophy)',
+    CurrentValue = false,
+    Callback = function(Value)
+        autoEgg1 = Value
+    end,
+})
+
+EggsTab:CreateToggle({
+    Name = 'Auto Open Egg 2 (500 Trophy)',
+    CurrentValue = false,
+    Callback = function(Value)
+        autoEgg2 = Value
+    end,
+})
+
+EggsTab:CreateToggle({
+    Name = 'Auto Open Egg 3 (30K Trophy)',
+    CurrentValue = false,
+    Callback = function(Value)
+        autoEgg3 = Value
+    end,
+})
+
+EggsTab:CreateToggle({
+    Name = 'Auto Open Egg 4 (400K Trophy)',
+    CurrentValue = false,
+    Callback = function(Value)
+        autoEgg4 = Value
+    end,
+})
+
+task.spawn(function()
+    while true do
+        if autoEgg1 then
+            openEgg(1)
+        end
+        if autoEgg2 then
+            openEgg(2)
+        end
+        if autoEgg3 then
+            openEgg(3)
+        end
+        if autoEgg4 then
+            openEgg(4)
+        end
+        task.wait(1) -- You can reduce this if needed
+    end
+end)
