@@ -1,0 +1,254 @@
+--// Load Rayfield UI
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+
+local Window = Rayfield:CreateWindow({
+    Name = "Fishing Hub",
+    LoadingTitle = "ScriptsRBX.com",
+    LoadingSubtitle = "Cage Fishing",
+    ConfigurationSaving = { Enabled = true, FileName = "FishingHubCfg" },
+    KeySystem = false
+})
+
+--// Services & Paths
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+
+local Remotes     = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Server")
+local CollectLoot = Remotes:WaitForChild("CollectLoot")   -- RemoteFunction
+local FishShop    = Remotes:WaitForChild("FishShop")      -- RemoteEvent
+local BaitRemote  = Remotes:WaitForChild("Bait")          -- RemoteEvent
+local ItemRemote  = Remotes:WaitForChild("Item")          -- RemoteEvent
+
+local function getPlayerBase()
+    return workspace:WaitForChild("Debris")
+        :WaitForChild("Players")
+        :WaitForChild(LocalPlayer.Name)
+end
+
+local function getLootAndCages()
+    local base = getPlayerBase()
+    return base:WaitForChild("Loot"), base:WaitForChild("Cages")
+end
+
+-- GUI paths for selling
+local MainGui   = LocalPlayer:WaitForChild("PlayerGui"):WaitForChild("Main")
+local Hotbar    = MainGui.Bottom:WaitForChild("Hotbar")
+local Inventory = MainGui.Centre.Inventory:WaitForChild("ScrollingFrame")
+
+local LOOT_PATTERN = "^Loot%-%d+%-%d+$"
+
+--///////////// STATE FLAGS
+local flags = {
+    autoCollect = false,
+    autoSell = false,
+    sellInterval = 10,
+    autoBuy = false,
+    buyInterval = 2,
+    baitIndex = 1,
+}
+local firstSinkDone = false
+
+--///////////// HELPERS
+local function childrenSnapshot(folder)
+    local t = {}
+    for _, c in ipairs(folder:GetChildren()) do t[#t+1] = c end
+    return t
+end
+
+local function sinkAllCages(cages)
+    for _, cage in ipairs(cages) do
+        pcall(function()
+            ItemRemote:FireServer("Cage", cage.Name, "Sink")
+        end)
+        task.wait(0.05)
+    end
+end
+
+local function collectAllSellIds()
+    local seen, list = {}, {}
+    local function scan(folder)
+        for _, child in ipairs(folder:GetChildren()) do
+            local n = child.Name
+            if typeof(n) == "string" and n:match(LOOT_PATTERN) and not seen[n] then
+                seen[n] = true
+                list[#list+1] = n
+            end
+        end
+    end
+    scan(Hotbar); scan(Inventory)
+    return list
+end
+
+local function purgeButtons(ids)
+    local set = {}
+    for _, id in ipairs(ids) do set[id] = true end
+    local function purge(folder)
+        for _, c in ipairs(folder:GetChildren()) do
+            if set[c.Name] then pcall(function() c:Destroy() end) end
+        end
+    end
+    purge(Hotbar); purge(Inventory)
+end
+
+--///////////// AUTO COLLECT LOOP
+task.spawn(function()
+    while true do
+        if flags.autoCollect then
+            local lootFolder, cagesFolder = getLootAndCages()
+            local cages = childrenSnapshot(cagesFolder)
+            local loots = childrenSnapshot(lootFolder)
+
+            local attemptedCollect = false
+
+            for _, loot in ipairs(loots) do
+                if not loot or not loot.Parent then continue end
+                if loot:GetAttribute("Collecting") then continue end
+                loot:SetAttribute("Collecting", true)
+
+                attemptedCollect = true
+                local lootName = loot.Name
+
+                -- Try each cage (ignore return value, force-remove after)
+                for _, cage in ipairs(cages) do
+                    pcall(function()
+                        CollectLoot:InvokeServer("Cage", cage.Name, "CollectLoot", { LootId = lootName })
+                    end)
+                    task.wait(0.03)
+                end
+
+                task.wait(0.15)
+                if loot and loot.Parent == lootFolder then
+                    pcall(function() loot:Destroy() end)
+                end
+            end
+
+            -- Sink all cages after the first collect pass
+            if attemptedCollect and not firstSinkDone then
+                sinkAllCages(cages)
+                firstSinkDone = true
+            end
+        end
+        task.wait(0.2)
+    end
+end)
+
+--///////////// AUTO SELL LOOP
+task.spawn(function()
+    while true do
+        if flags.autoSell then
+            local ids = collectAllSellIds()
+            if #ids > 0 then
+                pcall(function()
+                    FishShop:FireServer("SellAll", { ids })
+                end)
+                task.wait(0.2)
+                purgeButtons(ids)
+            end
+            task.wait(flags.sellInterval)
+        else
+            task.wait(0.2)
+        end
+    end
+end)
+
+--///////////// AUTO BUY LOOP
+task.spawn(function()
+    while true do
+        if flags.autoBuy then
+            pcall(function()
+                BaitRemote:FireServer("Buy", flags.baitIndex)
+            end)
+            task.wait(flags.buyInterval)
+        else
+            task.wait(0.2)
+        end
+    end
+end)
+
+--///////////// UI
+local AutoFarmTab = Window:CreateTab("Auto Farm", 4483362458)
+
+AutoFarmTab:CreateToggle({
+    Name = "Auto Collect Cages",
+    CurrentValue = false,
+    Callback = function(v)
+        flags.autoCollect = v
+        if v then firstSinkDone = false end
+    end
+})
+
+AutoFarmTab:CreateToggle({
+    Name = "Auto Sell (every X sec)",
+    CurrentValue = false,
+    Callback = function(v) flags.autoSell = v end
+})
+
+AutoFarmTab:CreateSlider({
+    Name = "Sell Timer (lower value = may cause lag)",
+    Range = {2, 30},
+    Increment = 1,
+    CurrentValue = flags.sellInterval,
+    Callback = function(v) flags.sellInterval = v end
+})
+
+AutoFarmTab:CreateButton({
+    Name = "Sell Now (one shot)",
+    Callback = function()
+        local ids = collectAllSellIds()
+        if #ids > 0 then
+            pcall(function() FishShop:FireServer("SellAll", { ids }) end)
+            task.wait(0.2)
+            purgeButtons(ids)
+        end
+    end
+})
+
+-- Shop tab
+local ShopTab = Window:CreateTab("Shop", 4483362458)
+
+local baitMap = {
+    ["$250 | Jar O' Worms (Common)"]       = 1,
+    ["$1.5K | Jar O' Grubs (Uncommon)"]     = 2,
+    ["$5K | Jar O' Leeches (Rare)"]       = 3,
+    ["$65K | Jar O' Fireflies (Epic)"]     = 4,
+    ["$325K | Jar O' Gold Bugs (Legendary)"]= 5,
+    ["$620K | Jar O' Ancient Larvae (Mythic)"]= 6,
+    ["$1.25M | Jar O' Voidflies (Secret)"]   = 7,
+}
+
+ShopTab:CreateDropdown({
+    Name = "Choose Bait",
+    Options = (function()
+        local t = {}
+        for k in pairs(baitMap) do table.insert(t, k) end
+        table.sort(t, function(a,b) return baitMap[a] < baitMap[b] end)
+        return t
+    end)(),
+    CurrentOption = { "$250 | Jar O' Worms (Common)" },
+    Callback = function(optionList)
+        local opt = optionList[1]
+        flags.baitIndex = baitMap[opt] or 1
+    end
+})
+
+ShopTab:CreateButton({
+    Name = "Buy Selected Bait (once)",
+    Callback = function()
+        pcall(function() BaitRemote:FireServer("Buy", flags.baitIndex) end)
+    end
+})
+
+ShopTab:CreateToggle({
+    Name = "Auto Buy Selected Bait",
+    CurrentValue = false,
+    Callback = function(v) flags.autoBuy = v end
+})
+
+ShopTab:CreateSlider({
+    Name = "Auto Buy Interval (sec)",
+    Range = {1, 30},
+    Increment = 1,
+    CurrentValue = flags.buyInterval,
+    Callback = function(v) flags.buyInterval = v end
+})
