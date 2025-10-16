@@ -1,0 +1,311 @@
+-- ===================== Enjoy this ChatGPT generated script =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/key/')
+	end
+end)
+
+-- ===================== Load Rayfield =====================
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+
+local Window = Rayfield:CreateWindow({
+	Name = "ScriptsRBX | Full Hub",
+	LoadingTitle = "ScriptsRBX Utility Suite",
+	LoadingSubtitle = "Loot, Player, ESP, and Room Automation",
+	Theme = "Default",
+	ShowText = "ScriptsRBX Hub",
+	ToggleUIKeybind = "K",
+	KeySystem = false,
+})
+
+-- ===================== Tabs =====================
+local LootTab = Window:CreateTab("Bring Items", "package-search")
+local PlayerTab = Window:CreateTab("Player Controls", "user")
+local RoomTab = Window:CreateTab("Auto Room", "hammer")
+
+-- =========================================================
+-- =============== BRING ITEMS TAB ==========================
+-- =========================================================
+local lootFolder = workspace:FindFirstChild("Loot")
+if not lootFolder then
+	Rayfield:Notify({ Title="Error", Content="workspace.Loot not found!", Image="alert-triangle", Duration=5 })
+	return
+end
+
+local MODELS, OPTIONS = {}, {}
+local SEARCH = ""
+
+local function buildSnapshot()
+	MODELS = {}
+	for _, obj in ipairs(lootFolder:GetChildren()) do
+		if obj:IsA("Model") then
+			table.insert(MODELS, obj)
+		end
+	end
+	table.sort(MODELS, function(a,b) return a.Name:lower() < b.Name:lower() end)
+end
+
+local function rebuildOptions()
+	local seen, list = {}, {}
+	for _, m in ipairs(MODELS) do
+		if SEARCH == "" or string.find(m.Name:lower(), SEARCH, 1, true) then
+			if not seen[m.Name] then
+				table.insert(list, m.Name)
+				seen[m.Name] = true
+			end
+		end
+	end
+	OPTIONS = list
+end
+
+local function bringAllByName(itemName)
+	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	if not (hrp and lootFolder) then return end
+
+	local count = 0
+	for _, obj in ipairs(lootFolder:GetChildren()) do
+		if obj:IsA("Model") and obj.Name == itemName then
+			local target = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+			if target then
+				obj:PivotTo(hrp.CFrame + Vector3.new(math.random(-4,4), 2, math.random(-4,4)))
+				count += 1
+			end
+		end
+	end
+
+	if count > 0 then
+		Rayfield:Notify({ Title="Items Brought", Content=string.format("Moved %d × %s to you!", count, itemName), Image="box", Duration=3 })
+	else
+		Rayfield:Notify({ Title="No Items Found", Content="No models named '"..itemName.."' exist in workspace.Loot.", Image="alert-triangle", Duration=3 })
+	end
+end
+
+buildSnapshot()
+rebuildOptions()
+
+local Input = LootTab:CreateInput({
+	Name="Search Loot",
+	PlaceholderText="Type to filter...",
+	CurrentValue="",
+	RemoveTextAfterFocusLost=false,
+	Flag="SearchLoot",
+	Callback=function(text)
+		SEARCH = text:lower()
+		rebuildOptions()
+		Dropdown:Refresh(OPTIONS)
+	end
+})
+
+local Dropdown = LootTab:CreateDropdown({
+	Name="Select Item to Bring",
+	Options=OPTIONS,
+	CurrentOption={},
+	MultipleOptions=false,
+	Flag="BringDropdown",
+	Callback=function(opt)
+		local item = opt and opt[1]
+		if item then bringAllByName(item) end
+	end
+})
+
+LootTab:CreateButton({
+	Name="🔄 Refresh Loot List",
+	Callback=function()
+		buildSnapshot()
+		rebuildOptions()
+		Dropdown:Refresh(OPTIONS)
+		Rayfield:Notify({ Title="Loot Refreshed", Content="workspace.Loot updated successfully.", Image="refresh-ccw", Duration=3 })
+	end
+})
+
+lootFolder.ChildAdded:Connect(function()
+	task.wait(0.2)
+	buildSnapshot()
+	rebuildOptions()
+	Dropdown:Refresh(OPTIONS)
+end)
+lootFolder.ChildRemoved:Connect(function()
+	task.wait(0.2)
+	buildSnapshot()
+	rebuildOptions()
+	Dropdown:Refresh(OPTIONS)
+end)
+
+-- =========================================================
+-- =============== PLAYER CONTROLS TAB ======================
+-- =========================================================
+local function getHumanoid()
+	local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+	return char:FindFirstChildWhichIsA("Humanoid")
+end
+
+PlayerTab:CreateSlider({
+	Name="WalkSpeed",
+	Range={16,200},
+	Increment=1,
+	Suffix=" speed",
+	CurrentValue=16,
+	Flag="WalkSpeed",
+	Callback=function(value)
+		local hum = getHumanoid()
+		if hum then hum.WalkSpeed = value end
+	end
+})
+
+PlayerTab:CreateSlider({
+	Name="JumpPower",
+	Range={50,300},
+	Increment=5,
+	Suffix=" power",
+	CurrentValue=50,
+	Flag="JumpPower",
+	Callback=function(value)
+		local hum = getHumanoid()
+		if hum then hum.JumpPower = value end
+	end
+})
+
+PlayerTab:CreateButton({
+	Name="🎥 Third Person View",
+	Callback=function()
+		LocalPlayer.CameraMode = Enum.CameraMode.Classic
+		Rayfield:Notify({ Title="Camera Mode Changed", Content="You are now in third person view.", Image="video", Duration=3 })
+	end
+})
+
+-- =========================================================
+-- =============== NPC ESP SYSTEM ===========================
+-- =========================================================
+local npcFolder = workspace:FindFirstChild("NPCs")
+local npcHighlights = {}
+local espEnabled = false
+
+local function createHighlight(npc)
+	if not npc:IsA("Model") or npcHighlights[npc] then return end
+	local hl = Instance.new("Highlight")
+	hl.Name = "NPC_Highlight"
+	hl.FillColor = Color3.fromRGB(255, 0, 0)
+	hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+	hl.FillTransparency = 0.5
+	hl.Adornee = npc
+	hl.Parent = npc
+	npcHighlights[npc] = hl
+end
+
+local function removeHighlight(npc)
+	if npcHighlights[npc] then
+		npcHighlights[npc]:Destroy()
+		npcHighlights[npc] = nil
+	end
+end
+
+local function setNPCEsp(enabled)
+	espEnabled = enabled
+	if not npcFolder then return end
+
+	if enabled then
+		for _, npc in ipairs(npcFolder:GetChildren()) do createHighlight(npc) end
+	else
+		for npc, hl in pairs(npcHighlights) do if hl then hl:Destroy() end end
+		table.clear(npcHighlights)
+	end
+end
+
+if npcFolder then
+	npcFolder.ChildAdded:Connect(function(obj)
+		if espEnabled then task.wait(0.1) createHighlight(obj) end
+	end)
+	npcFolder.ChildRemoved:Connect(removeHighlight)
+end
+
+PlayerTab:CreateToggle({
+	Name="👁️ NPC ESP",
+	CurrentValue=false,
+	Flag="NPCEsp",
+	Callback=function(state)
+		setNPCEsp(state)
+		Rayfield:Notify({
+			Title="NPC ESP",
+			Content=state and "ESP Enabled for workspace.NPCs" or "ESP Disabled",
+			Image=state and "eye" or "eye-off",
+			Duration=3
+		})
+	end
+})
+
+-- =========================================================
+-- =============== AUTO ROOM COMPLETION =====================
+-- =========================================================
+local Projects = workspace:WaitForChild("Projects")
+local active = false
+
+local function bringAllByNameForRoom(name)
+	local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+	if not (hrp and lootFolder) then return end
+
+	local found = false
+	for _, obj in ipairs(lootFolder:GetChildren()) do
+		if obj:IsA("Model") and obj.Name == name then
+			local base = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+			if base then
+				obj:PivotTo(hrp.CFrame + Vector3.new(math.random(-3,3), 2, math.random(-3,3)))
+				found = true
+			end
+		end
+	end
+
+	if not found then
+		Rayfield:Notify({
+			Title = "Missing Item",
+			Content = "No loot named '"..name.."' found in workspace.Loot.",
+			Image = "alert-triangle",
+			Duration = 3
+		})
+	end
+end
+
+local function getActiveProjects()
+	local list = {}
+	for _, proj in ipairs(Projects:GetChildren()) do
+		if proj:IsA("Folder") then
+			local progress = proj:FindFirstChild("Progress")
+			local comp = proj:FindFirstChild("CurrentComponent")
+			if progress and comp and progress.Value < 100 then
+				table.insert(list, proj)
+			end
+		end
+	end
+	return list
+end
+
+local function loopAutoComplete()
+	while active do
+		local projects = getActiveProjects()
+		for _, proj in ipairs(projects) do
+			local comp = proj:FindFirstChild("CurrentComponent")
+			local prog = proj:FindFirstChild("Progress")
+			if comp and prog and prog.Value < 100 and comp.Value ~= "" then
+				bringAllByNameForRoom(comp.Value)
+			end
+		end
+		task.wait(2.5)
+	end
+end
+
+RoomTab:CreateToggle({
+	Name="🏗️ Auto Complete Rooms",
+	CurrentValue=false,
+	Flag="AutoRoom",
+	Callback=function(val)
+		active = val
+		if val then
+			task.spawn(loopAutoComplete)
+			Rayfield:Notify({ Title="Auto Room Builder", Content="Enabled Auto Completion", Image="hammer", Duration=3 })
+		else
+			Rayfield:Notify({ Title="Auto Room Builder", Content="Disabled Auto Completion", Image="pause", Duration=3 })
+		end
+	end
+})
