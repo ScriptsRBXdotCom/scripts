@@ -1,0 +1,262 @@
+-- ===================== Copy key site to clipboard =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/')
+	end
+end)
+
+-- ===================== Load Rayfield UI =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ===================== Key fetcher =====================
+local HttpService = game:GetService('HttpService')
+local function fetchKeys(url)
+	local ok, body = pcall(function() return game:HttpGet(url) end)
+	if not ok or not body then return {} end
+
+	local okJson, arr = pcall(function() return HttpService:JSONDecode(body) end)
+	if okJson and type(arr) == 'table' then
+		local out = {}
+		for _, k in ipairs(arr) do
+			if type(k) == 'string' and #k > 0 then table.insert(out, k) end
+		end
+		return out
+	end
+
+	local out = {}
+	body = body:gsub('\r', '\n')
+	for key in body:gmatch('[^\n,]+') do
+		key = key:match('^%s*(.-)%s*$')
+		if key ~= '' then table.insert(out, key) end
+	end
+	return out
+end
+
+local KEYS_URL = 'https://raw.githubusercontent.com/ScriptsRBXdotCom/scripts/refs/heads/main/Keys'
+local KEY_LIST = fetchKeys(KEYS_URL)
+if #KEY_LIST == 0 then KEY_LIST = {'ScriptsRBX-DFAD3'} end
+
+-- ===================== UI =====================
+local Window = Rayfield:CreateWindow({
+	Name = 'Auto Farm | ScriptsRBX',
+	LoadingTitle = 'ScriptsRBX.com Auto Farm',
+	LoadingSubtitle = 'ScriptsRBX',
+	Theme = 'Default',
+	ShowText = 'Auto Farm GUI',
+	ToggleUIKeybind = 'K',
+	KeySystem = false,
+})
+
+local Tab = Window:CreateTab('Main', 4483362458)
+
+-- =====================================================================
+--                  AUTO DETECT PLOT + AUTO COLLECT
+-- =====================================================================
+
+local Players = game:GetService("Players")
+local LP = Players.LocalPlayer
+local username = LP.Name
+
+local Plots = workspace:WaitForChild("Plots")
+
+-- 🔍 Find which plot belongs to the player
+local function findMyPlot()
+	for _, plot in pairs(Plots:GetChildren()) do
+		local stand = plot:FindFirstChild("Stand")
+		if stand then
+			local nameFolder = stand:FindFirstChild("PlayerName")
+			if nameFolder then
+				local part = nameFolder:FindFirstChild("Part")
+				if part and part:FindFirstChild("SurfaceGui") then
+					local label = part.SurfaceGui:FindFirstChild("TextLabel")
+					if label and string.find(label.Text, username) then
+						return plot
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+local MyPlot = findMyPlot()
+
+if MyPlot then
+	warn("✅ Your plot is:", MyPlot.Name)
+else
+	warn("❌ Could NOT find your plot!")
+end
+
+-- ===================== AUTO COLLECT MONEY =====================
+
+local AutoCollect = false
+
+task.spawn(function()
+	while task.wait(0.15) do
+		if AutoCollect and MyPlot then
+			local cash = MyPlot:FindFirstChild("CashPile")
+			if cash and cash:FindFirstChild("Platform") then
+				local prompt = cash.Platform:FindFirstChild("ProximityPrompt")
+				if prompt then
+					fireproximityprompt(prompt)
+				end
+			end
+		end
+	end
+end)
+
+-- ===================== UI TOGGLE =====================
+
+Tab:CreateToggle({
+	Name = "Auto Collect Money",
+	CurrentValue = false,
+	Callback = function(state)
+		AutoCollect = state
+	end,
+})
+
+
+------------------------------------------------------------------------
+-- AUTO BUY SYSTEM WITH SEPARATE TOGGLES FOR EACH SLIDE / DECORATION
+------------------------------------------------------------------------
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local BuyRemote = ReplicatedStorage["ncxyzero_bridgenet2-fork@1.1.5"]:WaitForChild("dataRemoteEvent")
+
+-- Rides list
+local Rides = {
+    "Kid Slide",
+    "Spiral Slide",
+    "Hotdog Stand",
+    "Broken Slide",
+    "Slide Eater",
+    "Coffee Stand",
+    "Bowl Slide",
+    "Rainbow Slide",
+    "Pizza Stand",
+    "Toilet",
+    "Crazy Slide",
+    "67 Slide",
+    "Burger Stand",
+    "2026 Slide",
+    "Slushie Stand",
+    "Bloop Slide",
+    "Tropical Ramp Slide",
+    "Ice Cream Stand",
+    "Trapdoor Slide",
+    "Trapdoor Down Slide",
+    "Backrooms Slide"  -- always last
+}
+
+-- Decorations list
+local Decorations = {
+    "Grass Path","Bench","Wood Path","Small Lamp","Pine","Flowers","Tree",
+    "Big Lamp","Table","Fountain","Small House","Dance Floor"
+}
+
+------------------------------------------------------------------------
+-- UTILITY: START AUTO BUY LOOP FOR AN ITEM
+------------------------------------------------------------------------
+
+local function startAutoBuy(itemName, shopName, stateTable)
+    task.spawn(function()
+        while stateTable[itemName] do
+            pcall(function()
+                local args = {
+                    {
+                        {
+                            item = itemName,
+                            shop = shopName
+                        },
+                        "\016"
+                    }
+                }
+                BuyRemote:FireServer(unpack(args))
+            end)
+            task.wait(2) -- buy every 2 seconds
+        end
+    end)
+end
+
+------------------------------------------------------------------------
+-- UI
+------------------------------------------------------------------------
+
+local BuyTab = Window:CreateTab("Auto Buy", 4483362458)
+
+local rideState = {}
+local decoState = {}
+
+BuyTab:CreateLabel("🎢 Rides Auto Buy")
+
+-- Create toggle for each Ride
+for _, ride in ipairs(Rides) do
+    rideState[ride] = false
+
+    BuyTab:CreateToggle({
+        Name = "Auto Buy " .. ride,
+        CurrentValue = false,
+        Callback = function(state)
+            rideState[ride] = state
+            if state then
+                startAutoBuy(ride, "Rides", rideState)
+            end
+        end
+    })
+end
+
+
+local DecorationsTab = Window:CreateTab("Auto Buy", 4483362458)
+
+DecorationsTab:CreateLabel("🌳 Decorations Auto Buy")
+
+-- Create toggle for each Decoration
+for _, deco in ipairs(Decorations) do
+    decoState[deco] = false
+
+    DecorationsTab:CreateToggle({
+        Name = "Auto Buy " .. deco,
+        CurrentValue = false,
+        Callback = function(state)
+            decoState[deco] = state
+            if state then
+                startAutoBuy(deco, "Decorations", decoState)
+            end
+        end
+    })
+end
+
+-- Rebirth Remote
+local RebirthRemote = game:GetService("ReplicatedStorage")
+    :WaitForChild("ncxyzero_bridgenet2-fork@1.1.5")
+    :WaitForChild("dataRemoteEvent")
+
+local AutoRebirth = false
+
+local function startAutoRebirth()
+    task.spawn(function()
+        while AutoRebirth do
+            pcall(function()
+                local args = {
+                    {
+                        [2] = "\029"
+                    }
+                }
+                RebirthRemote:FireServer(unpack(args))
+            end)
+
+            task.wait(15) -- every 15 seconds
+        end
+    end)
+end
+
+Tab:CreateToggle({
+    Name = "Auto Rebirth",
+    CurrentValue = false,
+    Callback = function(state)
+        AutoRebirth = state
+        if state then
+            startAutoRebirth()
+        end
+    end,
+})
