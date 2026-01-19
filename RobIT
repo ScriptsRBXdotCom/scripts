@@ -1,0 +1,422 @@
+-- ===================== Copy key site to clipboard =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/')
+	end
+end)
+
+-- ===================== Load Rayfield UI =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ===================== Key fetcher =====================
+local HttpService = game:GetService('HttpService')
+local function fetchKeys(url)
+	local ok, body = pcall(function()
+		return game:HttpGet(url)
+	end)
+	if not ok or not body then
+		return {}
+	end
+
+	local okJson, arr = pcall(function()
+		return HttpService:JSONDecode(body)
+	end)
+	if okJson and type(arr) == 'table' then
+		local out = {}
+		for _, k in ipairs(arr) do
+			if type(k) == 'string' and #k > 0 then
+				table.insert(out, k)
+			end
+		end
+		return out
+	end
+
+	local out = {}
+	body = body:gsub('\r', '\n')
+	for key in body:gmatch('[^\n,]+') do
+		key = key:match('^%s*(.-)%s*$')
+		if key ~= '' then
+			table.insert(out, key)
+		end
+	end
+	return out
+end
+
+local KEYS_URL =
+	'https://raw.githubusercontent.com/ScriptsRBXdotCom/scripts/refs/heads/main/Keys'
+local KEY_LIST = fetchKeys(KEYS_URL)
+if #KEY_LIST == 0 then
+	KEY_LIST = { 'ScriptsRBX-DFAD3' }
+end
+
+
+-- ===================== UI =====================
+local Window = Rayfield:CreateWindow({
+    Name = 'Auto Farm | ScriptsRBX',
+    LoadingTitle = 'ScriptsRBX.com Auto Farm',
+    LoadingSubtitle = 'ScriptsRBX',
+    Theme = 'Default',
+    ShowText = 'Auto Farm GUI',
+    ToggleUIKeybind = 'K',
+    KeySystem = false,
+})
+
+local Tab = Window:CreateTab('Main', 4483362458)
+
+-- ==========================
+-- FIXED ITEM ESP (Red main / Green Natural)
+-- ==========================
+
+local StealFolder = workspace.Map:WaitForChild("StealableItems")
+local NaturalFolder = StealFolder:WaitForChild("Natural")
+
+local ESP_Enabled = false
+
+-- Remove all ESP
+local function clearESP()
+	for _, obj in ipairs(StealFolder:GetDescendants()) do
+		if obj.Name == "ESP_Highlight" or obj.Name == "ESP_Label" then
+			obj:Destroy()
+		end
+	end
+end
+
+local function makeESP(obj, color)
+	if not obj:IsA("Model") and not obj:IsA("BasePart") then return end
+	if obj:FindFirstChild("ESP_Highlight") then return end
+
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "ESP_Highlight"
+	highlight.FillColor = color
+	highlight.FillTransparency = 0.35
+	highlight.OutlineColor = Color3.fromRGB(255,255,255)
+	highlight.Parent = obj
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "ESP_Label"
+	billboard.Size = UDim2.new(0, 150, 0, 30)
+	billboard.AlwaysOnTop = true
+	billboard.MaxDistance = 2000
+	billboard.Parent = obj
+
+	local label = Instance.new("TextLabel")
+	label.BackgroundTransparency = 1
+	label.Size = UDim2.new(1,0,1,0)
+	label.Font = Enum.Font.GothamBold
+	label.TextScaled = true
+	label.Text = obj.Name
+	label.TextColor3 = color
+	label.TextStrokeTransparency = 0.3
+	label.Parent = billboard
+end
+
+-- Apply ESP to all items in a folder
+local function applyFolderESP(folder, color)
+	for _, item in ipairs(folder:GetChildren()) do
+		if item:IsA("Folder") then
+			applyFolderESP(item, color)
+		else
+			makeESP(item, color)
+		end
+	end
+	folder.ChildAdded:Connect(function(item)
+		task.wait(0.1)
+		if ESP_Enabled then
+			makeESP(item, color)
+		end
+	end)
+end
+
+local function enableESP()
+	ESP_Enabled = true
+	clearESP()
+
+	-- 🔴 RED ITEMS = everything in StealableItems EXCEPT Natural
+	for _, item in ipairs(StealFolder:GetChildren()) do
+		if item ~= NaturalFolder then
+			if item:IsA("Folder") then
+				applyFolderESP(item, Color3.fromRGB(255, 50, 50))
+			else
+				makeESP(item, Color3.fromRGB(255, 50, 50))
+			end
+		end
+	end
+
+	-- 🟢 GREEN ITEMS = everything inside Natural folder
+	applyFolderESP(NaturalFolder, Color3.fromRGB(50, 255, 50))
+end
+
+local function disableESP()
+	ESP_Enabled = false
+	clearESP()
+end
+
+-- UI Toggle
+Tab:CreateToggle({
+	Name = "Item ESP",
+	CurrentValue = false,
+	Callback = function(state)
+		if state then
+			enableESP()
+		else
+			disableESP()
+		end
+	end
+})
+
+
+-- =============================
+-- NPC ESP
+-- =============================
+
+local NPCFolder = workspace.Map:WaitForChild("NPCS")
+local NPC_ESP_ENABLED = false
+local npc_connections = {}
+
+local function clearNPCESP()
+	for _, npc in ipairs(NPCFolder:GetChildren()) do
+		if npc:FindFirstChild("NPC_ESP_Highlight") then
+			npc.NPC_ESP_Highlight:Destroy()
+		end
+		if npc:FindFirstChild("NPC_ESP_Label") then
+			npc.NPC_ESP_Label:Destroy()
+		end
+	end
+	for _, conn in ipairs(npc_connections) do
+		conn:Disconnect()
+	end
+	npc_connections = {}
+end
+
+local function makeNPCESP(npc)
+	if not npc:IsA("Model") then return end
+	if npc:FindFirstChild("HumanoidRootPart") == nil then return end
+	if npc:FindFirstChild("NPC_ESP_Highlight") then return end
+
+	-- Highlight
+	local hl = Instance.new("Highlight")
+	hl.Name = "NPC_ESP_Highlight"
+	hl.FillColor = Color3.fromRGB(255, 255, 0) -- yellow
+	hl.FillTransparency = 0.25
+	hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+	hl.Parent = npc
+
+	-- Name Billboard
+	local bill = Instance.new("BillboardGui")
+	bill.Name = "NPC_ESP_Label"
+	bill.Size = UDim2.new(0,150,0,30)
+	bill.AlwaysOnTop = true
+	bill.MaxDistance = 2000
+	bill.Adornee = npc:WaitForChild("HumanoidRootPart")
+	bill.Parent = npc
+
+	local txt = Instance.new("TextLabel")
+	txt.BackgroundTransparency = 1
+	txt.Size = UDim2.new(1,0,1,0)
+	txt.Font = Enum.Font.GothamBold
+	txt.TextScaled = true
+	txt.TextColor3 = Color3.fromRGB(255,255,0)
+	txt.TextStrokeTransparency = 0.2
+	txt.Text = npc.Name
+	txt.Parent = bill
+end
+
+local function enableNPCESP()
+	NPC_ESP_ENABLED = true
+	clearNPCESP()
+
+	-- Apply to existing NPCs
+	for _, npc in ipairs(NPCFolder:GetChildren()) do
+		makeNPCESP(npc)
+	end
+
+	-- For new NPCs spawning
+	table.insert(npc_connections, NPCFolder.ChildAdded:Connect(function(child)
+		task.wait(0.2)
+		if NPC_ESP_ENABLED then
+			makeNPCESP(child)
+		end
+	end))
+end
+
+local function disableNPCESP()
+	NPC_ESP_ENABLED = false
+	clearNPCESP()
+end
+
+-- UI Toggle
+Tab:CreateToggle({
+	Name = "NPC ESP",
+	CurrentValue = false,
+	Callback = function(state)
+		if state then
+			enableNPCESP()
+		else
+			disableNPCESP()
+		end
+	end
+})
+
+
+Tab:CreateButton({
+	Name = "Teleport to Truck",
+	Callback = function()
+		local truck = workspace.Map:FindFirstChild("CollectTruck")
+		local root = game.Players.LocalPlayer.Character and game.Players.LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if truck and root then
+			root.CFrame = truck:GetPivot()
+		end
+	end
+})
+
+
+
+Tab:CreateButton({
+	Name = "Delete Doors",
+	Callback = function()
+		local doors = workspace.Map:FindFirstChild("Doors")
+		if doors then
+			doors:Destroy()
+		end
+	end
+})
+Tab:CreateButton({
+	Name = "Delete Cameras",
+	Callback = function()
+		local cams = workspace.Map:FindFirstChild("Cameras")
+		if cams then
+			cams:Destroy()
+		end
+	end
+})
+
+-- =============================
+-- Teleport to Electric Box
+-- =============================
+
+local LP = game:GetService("Players").LocalPlayer
+
+local function tpToElectricBox()
+    local char = LP.Character or LP.CharacterAdded:Wait()
+    local hrp = char:WaitForChild("HumanoidRootPart")
+
+    local boxFolder = workspace:FindFirstChild("ElectricBox")
+    if not boxFolder then
+        warn("⚠ No ElectricBox folder found!")
+        return
+    end
+
+    -- Primary location
+    local zone1 = boxFolder:FindFirstChild("ZonePart")
+
+    -- Fallback secondary spawn (common in this game)
+    local zone2 = nil
+    for _, v in ipairs(boxFolder:GetChildren()) do
+        if v:IsA("BasePart") and v.Name ~= "ZonePart" then
+            zone2 = v
+            break
+        end
+    end
+
+    local destination = nil
+
+    if zone1 then
+        print("🔌 Teleporting to Electric Box (Primary Spawn)")
+        destination = zone1
+    elseif zone2 then
+        print("🔌 Teleporting to Electric Box (Fallback Spawn)")
+        destination = zone2
+    else
+        warn("⚠ ElectricBox found, but no ZonePart or fallback part exists.")
+        return
+    end
+
+    -- TP
+    hrp.CFrame = destination.CFrame + Vector3.new(0, 3, 0)
+end
+
+
+-- UI Button
+Tab:CreateButton({
+    Name = "Teleport to Electric Box",
+    Callback = function()
+        tpToElectricBox()
+    end
+})
+
+
+-- =============================
+-- WalkSpeed Slider + Loop
+-- =============================
+
+local Players = game:GetService("Players")
+local LP = Players.LocalPlayer
+
+local currentWS = 16           -- default Roblox walk speed
+local wsLoopRunning = false    -- loop control
+
+-- Function to apply walkspeed safely
+local function applyWS()
+    pcall(function()
+        local char = LP.Character
+        if not char then return end
+        local hum = char:FindFirstChildWhichIsA("Humanoid")
+        if hum then
+            hum.WalkSpeed = currentWS
+        end
+    end)
+end
+
+-- Start auto-loop that reapplies WalkSpeed every 0.5s
+local function startWSLoop()
+    if wsLoopRunning then return end
+    wsLoopRunning = true
+
+    task.spawn(function()
+        while wsLoopRunning do
+            applyWS()
+            task.wait(0.5)
+        end
+    end)
+end
+
+-- Restart WS loop on character respawn
+LP.CharacterAdded:Connect(function()
+    task.wait(1) -- wait for humanoid to load
+    applyWS()
+end)
+
+-- UI Slider
+Tab:CreateSlider({
+    Name = "WalkSpeed",
+    Range = {0, 200},
+    Increment = 1,
+    Suffix = "WS",
+    CurrentValue = 16,
+    Callback = function(value)
+        currentWS = value
+        applyWS()
+        startWSLoop()
+    end
+})
+
+Tab:CreateButton({
+    Name = "Full Brightness",
+    Callback = function()
+        local lightsFolder = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Lights")
+        if not lightsFolder then
+            warn("Lights folder not found!")
+            return
+        end
+
+        -- Loop all parts in Lights folder
+        for _, obj in ipairs(lightsFolder:GetDescendants()) do
+            if obj:IsA("PointLight") then
+                obj.Enabled = true
+                obj.Range = 78
+                obj.Brightness = 0.4
+                obj.Shadows = false
+            end
+        end
+    end
+})
