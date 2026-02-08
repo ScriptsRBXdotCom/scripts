@@ -1,0 +1,273 @@
+-- ===================== Copy key site to clipboard =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/')
+	end
+end)
+
+-- ===================== Load Rayfield UI =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ===================== Key fetcher =====================
+local HttpService = game:GetService('HttpService')
+local function fetchKeys(url)
+	local ok, body = pcall(function()
+		return game:HttpGet(url)
+	end)
+	if not ok or not body then
+		return {}
+	end
+
+	local okJson, arr = pcall(function()
+		return HttpService:JSONDecode(body)
+	end)
+	if okJson and type(arr) == 'table' then
+		local out = {}
+		for _, k in ipairs(arr) do
+			if type(k) == 'string' and #k > 0 then
+				table.insert(out, k)
+			end
+		end
+		return out
+	end
+
+	local out = {}
+	body = body:gsub('\r', '\n')
+	for key in body:gmatch('[^\n,]+') do
+		key = key:match('^%s*(.-)%s*$')
+		if key ~= '' then
+			table.insert(out, key)
+		end
+	end
+	return out
+end
+
+local KEYS_URL =
+	'https://raw.githubusercontent.com/ScriptsRBXdotCom/scripts/refs/heads/main/Keys'
+local KEY_LIST = fetchKeys(KEYS_URL)
+if #KEY_LIST == 0 then
+	KEY_LIST = { 'ScriptsRBX-DFAD3' }
+end
+
+
+-- ===================== UI =====================
+local Window = Rayfield:CreateWindow({
+    Name = 'Auto Farm | ScriptsRBX',
+    LoadingTitle = 'ScriptsRBX.com Auto Farm',
+    LoadingSubtitle = 'ScriptsRBX',
+    Theme = 'Default',
+    ShowText = 'Auto Farm GUI',
+    ToggleUIKeybind = 'K',
+    KeySystem = false,
+})
+
+local Tab = Window:CreateTab('Main', 4483362458)
+-- ===================== Auto Click Toggle (UI Pattern) =====================
+local autoClick = false
+
+Tab:CreateToggle({
+	Name = "Auto Clicks & Attack",
+	CurrentValue = false,
+	Flag = "AutoClicks",
+	Callback = function(Value)
+		autoClick = Value
+	end,
+})
+
+-- loop pattern (does nothing harmful by default)
+task.spawn(function()
+	while true do
+		if autoClick then
+            game:GetService("ReplicatedStorage"):WaitForChild("Packages"):WaitForChild("_Index"):WaitForChild("sleitnick_knit@1.5.1"):WaitForChild("knit"):WaitForChild("Services"):WaitForChild("ClickService"):WaitForChild("RF"):WaitForChild("Click"):InvokeServer()
+
+		end
+		task.wait(0.1) -- controls speed
+	end
+end)
+
+-- ============================================================
+--                STUDIO-FRIENDLY MOB FARM SYSTEM
+-- ============================================================
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local MobsFolder = workspace:WaitForChild("Mobs")
+
+-- GLOBAL FLAGS UPDATED BY RAYFIELD UI
+_G.AutoFarm = false
+_G.AutoFace = true
+_G.TeleportFarm = true
+_G.SelectedEnemy = nil
+
+local function ConvertHP(text)
+	text = text:lower()
+	local num = tonumber(text:match("[%d%.]+"))
+	if not num then return 0 end
+
+	if text:find("k") then
+		return num * 1_000
+	elseif text:find("m") then
+		return num * 1_000_000
+	elseif text:find("b") then
+		return num * 1_000_000_000
+	elseif text:find("t") then
+		return num * 1_000_000_000_000
+	end
+	return num
+end
+
+local function GetClosestAliveEnemy(targetName)
+	local char = LocalPlayer.Character
+	if not char or not char:FindFirstChild("HumanoidRootPart") then return nil end
+
+	local root = char.HumanoidRootPart
+	local closest = nil
+	local closestDist = math.huge
+
+	for _, mob in ipairs(MobsFolder:GetChildren()) do
+		local hrp = mob:FindFirstChild("HumanoidRootPart")
+		if hrp then
+			local overhead = hrp:FindFirstChild("EnemyOverhead")
+			local nameTag = overhead and overhead:FindFirstChild("Enemy")
+			local hpFolder = overhead and overhead:FindFirstChild("HP")
+			local hpAmount = hpFolder and hpFolder:FindFirstChild("Amount")
+
+			if nameTag and hpAmount and nameTag.Text == targetName then
+				local hp = ConvertHP(hpAmount.Text)
+				if hp > 0 then
+					local dist = (hrp.Position - root.Position).Magnitude
+					if dist < closestDist then
+						closestDist = dist
+						closest = hrp
+					end
+				end
+			end
+		end
+	end
+
+	return closest
+end
+
+local function FaceTowards(targetHrp)
+	local char = LocalPlayer.Character
+	if not char then return end
+
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+
+	local direction = (targetHrp.Position - root.Position).Unit
+	root.CFrame = CFrame.new(root.Position, Vector3.new(direction.X, 0, direction.Z))
+end
+
+-- ======================= AUTO FARM LOOP ===========================
+task.spawn(function()
+	while task.wait(0.1) do
+		if _G.AutoFarm and _G.SelectedEnemy then
+			local target = GetClosestAliveEnemy(_G.SelectedEnemy)
+
+			if target then
+				local char = LocalPlayer.Character
+				if not char then continue end
+
+				local root = char:FindFirstChild("HumanoidRootPart")
+				if root then
+					if _G.TeleportFarm then
+						root.CFrame = target.CFrame + Vector3.new(0, 4, 0)
+					end
+
+					if _G.AutoFace then
+						FaceTowards(target)
+					end
+				end
+
+				-- WAIT FOR ENEMY TO DIE
+				local overhead = target.Parent:FindFirstChild("HumanoidRootPart")
+					and target.Parent.HumanoidRootPart:FindFirstChild("EnemyOverhead")
+
+				if overhead then
+					local hpAmount = overhead.HP and overhead.HP:FindFirstChild("Amount")
+
+					while _G.AutoFarm
+						and target.Parent ~= nil
+						and hpAmount
+						and ConvertHP(hpAmount.Text) > 0 do
+						task.wait(0.1)
+					end
+				end
+			end
+		end
+	end
+end)
+
+-- ============================================================
+--                   RAYFIELD UI INTEGRATION
+-- ============================================================
+
+local function GetEnemyNames()
+	local seen = {}
+	local list = {}
+
+	for _, mob in ipairs(MobsFolder:GetChildren()) do
+		local hrp = mob:FindFirstChild("HumanoidRootPart")
+		if hrp then
+			local overhead = hrp:FindFirstChild("EnemyOverhead")
+			local nameTag = overhead and overhead:FindFirstChild("Enemy")
+
+			if nameTag and not seen[nameTag.Text] then
+				seen[nameTag.Text] = true
+				table.insert(list, nameTag.Text)
+			end
+		end
+	end
+
+	return list
+end
+
+local EnemyList = GetEnemyNames()
+
+-- GUI HOOKS (YOUR EXISTING RAYFIELD TAB)
+local EnemyDropdown = Tab:CreateDropdown({
+	Name = "Select Enemy",
+	Options = EnemyList,
+	CurrentOption = {},
+	MultipleOptions = false,
+	Flag = "EnemySelect",
+	Callback = function(option)
+		_G.SelectedEnemy = option[1]
+	end,
+})
+
+Tab:CreateButton({
+	Name = "Refresh Enemy List",
+	Callback = function()
+		EnemyList = GetEnemyNames()
+		EnemyDropdown:Refresh(EnemyList)
+	end,
+})
+
+Tab:CreateToggle({
+	Name = "Auto Farm",
+	CurrentValue = false,
+	Flag = "AF_Toggle",
+	Callback = function(v)
+		_G.AutoFarm = v
+	end,
+})
+
+Tab:CreateToggle({
+	Name = "Auto Face Enemy",
+	CurrentValue = true,
+	Flag = "AF_Face",
+	Callback = function(v)
+		_G.AutoFace = v
+	end,
+})
+
+Tab:CreateToggle({
+	Name = "Teleport To Enemy",
+	CurrentValue = true,
+	Flag = "AF_TP",
+	Callback = function(v)
+		_G.TeleportFarm = v
+	end,
+})
