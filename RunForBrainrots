@@ -1,0 +1,218 @@
+-- ===================== Copy key site to clipboard =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/key/')
+	end
+end)
+
+-- ===================== Load Rayfield UI =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ===================== Key fetcher =====================
+local HttpService = game:GetService('HttpService')
+local function fetchKeys(url)
+	local ok, body = pcall(function()
+		return game:HttpGet(url)
+	end)
+	if not ok or not body then
+		return {}
+	end
+
+	local okJson, arr = pcall(function()
+		return HttpService:JSONDecode(body)
+	end)
+	if okJson and type(arr) == 'table' then
+		local out = {}
+		for _, k in ipairs(arr) do
+			if type(k) == 'string' and #k > 0 then
+				table.insert(out, k)
+			end
+		end
+		return out
+	end
+
+	local out = {}
+	body = body:gsub('\r', '\n')
+	for key in body:gmatch('[^\n,]+') do
+		key = key:match('^%s*(.-)%s*$')
+		if key ~= '' then
+			table.insert(out, key)
+		end
+	end
+	return out
+end
+
+local KEYS_URL =
+	'https://raw.githubusercontent.com/ScriptsRBXdotCom/scripts/refs/heads/main/Keys'
+local KEY_LIST = fetchKeys(KEYS_URL)
+if #KEY_LIST == 0 then
+	KEY_LIST = { 'ScriptsRBX-DFAD3' }
+end
+
+
+-- ===================== UI =====================
+local Window = Rayfield:CreateWindow({
+    Name = 'Auto Farm | ScriptsRBX',
+    LoadingTitle = 'ScriptsRBX.com Auto Farm',
+    LoadingSubtitle = 'ScriptsRBX',
+    Theme = 'Default',
+    ShowText = 'Auto Farm GUI',
+    ToggleUIKeybind = 'K',
+    KeySystem = false,
+})
+
+local Tab = Window:CreateTab('Main', 4483362458)
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+-- Helper: get character safely
+local function getRoot()
+    local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    return char:WaitForChild("HumanoidRootPart")
+end
+
+-- Collect zones dynamically from workspace.Zones
+local ZonesFolder = workspace:WaitForChild("Zones")
+
+local function getZones()
+    local list = {}
+
+    for _, zone in ipairs(ZonesFolder:GetChildren()) do
+        table.insert(list, zone.Name)
+    end
+
+    table.sort(list) -- cleaner UI order
+    return list
+end
+
+local ZonesDropdown = Tab:CreateDropdown({
+    Name = "Select Zone",
+    Options = getZones(),
+    CurrentOption = {},
+    MultipleOptions = false,
+    Flag = "TeleportZone",
+
+    Callback = function(Options)
+        local chosen = Options[1]
+        if not chosen then return end
+
+        local zone = ZonesFolder:FindFirstChild(chosen)
+        if not zone then return end
+
+        -- Try direct CFrame OR PrimaryPart
+        local targetCFrame
+
+        if zone:IsA("BasePart") then
+            targetCFrame = zone.CFrame
+        elseif zone.PrimaryPart then
+            targetCFrame = zone.PrimaryPart.CFrame
+        else
+            -- Fallback: find any part inside
+            local part = zone:FindFirstChildWhichIsA("BasePart")
+            if part then
+                targetCFrame = part.CFrame
+            end
+        end
+
+        if targetCFrame then
+            getRoot().CFrame = targetCFrame + Vector3.new(0, 3, 0)
+
+            Rayfield:Notify({
+                Title = "Teleport Success",
+                Content = "Teleported to " .. chosen,
+                Duration = 3,
+                Image = "map-pin"
+            })
+        else
+            Rayfield:Notify({
+                Title = "Teleport Failed",
+                Content = "No valid CFrame found",
+                Duration = 3,
+                Image = "x"
+            })
+        end
+    end,
+})
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+local function getCharacter()
+    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+end
+
+local function getHumanoid()
+    local char = getCharacter()
+    return char:WaitForChild("Humanoid")
+end
+
+local function getRoot()
+    local char = getCharacter()
+    return char:WaitForChild("HumanoidRootPart")
+end
+Tab:CreateButton({
+    Name = "Teleport To Spawn",
+    Callback = function()
+        local spawn = workspace:FindFirstChild("SpawnLocation")
+        if not spawn then
+            Rayfield:Notify({
+                Title = "Teleport Failed",
+                Content = "SpawnLocation not found",
+                Duration = 3,
+                Image = "x"
+            })
+            return
+        end
+
+        local targetCFrame
+
+        if spawn:IsA("BasePart") then
+            targetCFrame = spawn.CFrame
+        elseif spawn.PrimaryPart then
+            targetCFrame = spawn.PrimaryPart.CFrame
+        else
+            local part = spawn:FindFirstChildWhichIsA("BasePart")
+            if part then
+                targetCFrame = part.CFrame
+            end
+        end
+
+        if targetCFrame then
+            getRoot().CFrame = targetCFrame + Vector3.new(0, 3, 0)
+
+            Rayfield:Notify({
+                Title = "ScriptsRBX",
+                Content = "Teleported to Spawn ✔",
+                Duration = 3,
+                Image = "map-pin"
+            })
+        end
+    end,
+})
+Tab:CreateSlider({
+    Name = "WalkSpeed",
+    Range = {16, 200},
+    Increment = 1,
+    CurrentValue = 16,
+    Flag = "PlayerWalkSpeed",
+
+    Callback = function(Value)
+        pcall(function()
+            getHumanoid().WalkSpeed = Value
+        end)
+    end,
+})
+Tab:CreateSlider({
+    Name = "JumpPower",
+    Range = {50, 200},
+    Increment = 1,
+    CurrentValue = 50,
+    Flag = "PlayerJumpPower",
+
+    Callback = function(Value)
+        pcall(function()
+            getHumanoid().JumpPower = Value
+        end)
+    end,
+})
