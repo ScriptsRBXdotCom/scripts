@@ -1,0 +1,232 @@
+-- ===================== Copy key site to clipboard =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/key/')
+	end
+end)
+
+-- ===================== Load Rayfield UI =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ===================== Key fetcher =====================
+local HttpService = game:GetService('HttpService')
+local function fetchKeys(url)
+	local ok, body = pcall(function()
+		return game:HttpGet(url)
+	end)
+	if not ok or not body then
+		return {}
+	end
+
+	local okJson, arr = pcall(function()
+		return HttpService:JSONDecode(body)
+	end)
+	if okJson and type(arr) == 'table' then
+		local out = {}
+		for _, k in ipairs(arr) do
+			if type(k) == 'string' and #k > 0 then
+				table.insert(out, k)
+			end
+		end
+		return out
+	end
+
+	local out = {}
+	body = body:gsub('\r', '\n')
+	for key in body:gmatch('[^\n,]+') do
+		key = key:match('^%s*(.-)%s*$')
+		if key ~= '' then
+			table.insert(out, key)
+		end
+	end
+	return out
+end
+
+local KEYS_URL =
+	'https://raw.githubusercontent.com/ScriptsRBXdotCom/scripts/refs/heads/main/Keys'
+local KEY_LIST = fetchKeys(KEYS_URL)
+if #KEY_LIST == 0 then
+	KEY_LIST = { 'ScriptsRBX-DFAD3' }
+end
+
+
+-- ===================== UI =====================
+local Window = Rayfield:CreateWindow({
+    Name = 'Auto Farm | ScriptsRBX',
+    LoadingTitle = 'ScriptsRBX.com Auto Farm',
+    LoadingSubtitle = 'ScriptsRBX',
+    Theme = 'Default',
+    ShowText = 'Auto Farm GUI',
+    ToggleUIKeybind = 'K',
+    KeySystem = false,
+})
+
+local Tab = Window:CreateTab('Main', 4483362458)
+-- ===================== SERVICES =====================
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+
+-- Remotes
+local ClickRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("ClickRemote")
+local AttackRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("AttackEvent")
+local RankUpRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("RankUpEvent")
+
+-- ===================== VARIABLES =====================
+local SelectedEnemy = nil
+local AutoFarm = false
+local AutoClick = false
+local AutoRank = false
+local Speed = 0.1
+
+-- ===================== GET UNIQUE ENEMIES =====================
+local function GetEnemies()
+    local list = {}
+    local used = {}
+
+    local folder = Workspace:FindFirstChild("Enemies")
+    if not folder then return {"No Enemies Found"} end
+
+    for _, enemy in ipairs(folder:GetChildren()) do
+        if enemy:IsA("Model") and not used[enemy.Name] then
+            used[enemy.Name] = true
+            table.insert(list, enemy.Name)
+        end
+    end
+
+    table.sort(list)
+    return list
+end
+
+-- ===================== FIND ENEMY INSTANCE =====================
+local function GetEnemyInstance(name)
+    local folder = Workspace:FindFirstChild("Enemies")
+    if not folder then return nil end
+
+    for _, enemy in ipairs(folder:GetChildren()) do
+        if enemy.Name == name and enemy:FindFirstChild("HumanoidRootPart") then
+            return enemy
+        end
+    end
+end
+
+-- ===================== SMART TELEPORT =====================
+local function SmartTeleport(enemy)
+    if not enemy or not enemy:FindFirstChild("HumanoidRootPart") then return end
+    if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then return end
+
+    local hrp = LocalPlayer.Character.HumanoidRootPart
+    local targetHRP = enemy.HumanoidRootPart
+
+    local distance = (hrp.Position - targetHRP.Position).Magnitude
+
+    -- Only teleport if too far (prevents jitter spam)
+    if distance > 8 then
+        hrp.CFrame = targetHRP.CFrame * CFrame.new(0,0,-3)
+    end
+end
+
+-- ===================== DROPDOWN =====================
+local EnemyDropdown = Tab:CreateDropdown({
+    Name = "Select Enemy",
+    Options = GetEnemies(),
+    CurrentOption = {},
+    MultipleOptions = false,
+    Flag = "EnemySelect",
+    Callback = function(Options)
+        SelectedEnemy = Options[1]
+    end,
+})
+
+-- ===================== REFRESH BUTTON =====================
+Tab:CreateButton({
+    Name = "Refresh Enemy List",
+    Callback = function()
+        EnemyDropdown:Refresh(GetEnemies())
+        Rayfield:Notify({
+            Title = "Refreshed",
+            Content = "Enemy list updated.",
+            Duration = 3
+        })
+    end,
+})
+
+-- ===================== SPEED SLIDER =====================
+Tab:CreateSlider({
+    Name = "Farm Speed",
+    Range = {0.05, 1},
+    Increment = 0.05,
+    CurrentValue = 0.1,
+    Suffix = "Delay",
+    Flag = "FarmSpeed",
+    Callback = function(Value)
+        Speed = Value
+    end,
+})
+
+-- ===================== AUTO CLICK =====================
+Tab:CreateToggle({
+    Name = "Auto Click",
+    CurrentValue = false,
+    Flag = "AutoClickToggle",
+    Callback = function(Value)
+        AutoClick = Value
+
+        if Value then
+            task.spawn(function()
+                while AutoClick do
+                    ClickRemote:FireServer()
+                    AttackRemote:FireServer()
+                    task.wait(Speed)
+                end
+            end)
+        end
+    end,
+})
+
+-- ===================== AUTO FARM =====================
+Tab:CreateToggle({
+    Name = "Auto Farm",
+    CurrentValue = false,
+    Flag = "AutoFarmToggle",
+    Callback = function(Value)
+        AutoFarm = Value
+
+        if Value then
+            task.spawn(function()
+                while AutoFarm do
+                    if SelectedEnemy then
+                        local enemy = GetEnemyInstance(SelectedEnemy)
+                        if enemy then
+                            SmartTeleport(enemy)
+                            ClickRemote:FireServer()
+                            AttackRemote:FireServer()
+                        end
+                    end
+                    task.wait(Speed)
+                end
+            end)
+        end
+    end,
+})
+
+-- ===================== AUTO RANK UP =====================
+Tab:CreateToggle({
+    Name = "Auto Rank Up",
+    CurrentValue = false,
+    Flag = "AutoRankToggle",
+    Callback = function(Value)
+        AutoRank = Value
+
+        if Value then
+            task.spawn(function()
+                while AutoRank do
+                    RankUpRemote:FireServer()
+                    task.wait(1) -- slight delay so it doesn’t spam insanely
+                end
+            end)
+        end
+    end,
+})
