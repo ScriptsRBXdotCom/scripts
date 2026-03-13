@@ -1,0 +1,140 @@
+-- ===================== Copy key site to clipboard =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/key/')
+	end
+end)
+
+-- ===================== Load Rayfield UI =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ===================== Key fetcher =====================
+local HttpService = game:GetService('HttpService')
+local function fetchKeys(url)
+	local ok, body = pcall(function()
+		return game:HttpGet(url)
+	end)
+	if not ok or not body then
+		return {}
+	end
+
+	local okJson, arr = pcall(function()
+		return HttpService:JSONDecode(body)
+	end)
+	if okJson and type(arr) == 'table' then
+		local out = {}
+		for _, k in ipairs(arr) do
+			if type(k) == 'string' and #k > 0 then
+				table.insert(out, k)
+			end
+		end
+		return out
+	end
+
+	local out = {}
+	body = body:gsub('\r', '\n')
+	for key in body:gmatch('[^\n,]+') do
+		key = key:match('^%s*(.-)%s*$')
+		if key ~= '' then
+			table.insert(out, key)
+		end
+	end
+	return out
+end
+
+local KEYS_URL =
+	'https://raw.githubusercontent.com/ScriptsRBXdotCom/scripts/refs/heads/main/Keys'
+local KEY_LIST = fetchKeys(KEYS_URL)
+if #KEY_LIST == 0 then
+	KEY_LIST = { 'ScriptsRBX-DFAD3' }
+end
+
+-- ===================== UI =====================
+local Window = Rayfield:CreateWindow({
+	Name = 'Auto Farm | ScriptsRBX',
+	LoadingTitle = 'ScriptsRBX.com Auto Farm',
+	LoadingSubtitle = 'ScriptsRBX',
+	Theme = 'Default',
+	ShowText = 'Auto Farm GUI',
+	ToggleUIKeybind = 'K',
+	KeySystem = false,
+})
+
+local Tab = Window:CreateTab('Main', 4483362458)
+
+-- ===================== Auto Farm =====================
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+
+local AutoFarmEnabled = false
+
+local radius = 6
+local speed = 2
+local smoothness = 0.15
+local angle = 0
+
+RunService.RenderStepped:Connect(function()
+
+	if not AutoFarmEnabled then return end
+
+	local myChar = LocalPlayer.Character
+	if not myChar then return end
+
+	local myHRP = myChar:FindFirstChild("HumanoidRootPart")
+	if not myHRP then return end
+
+	local myTeam = LocalPlayer.Team
+	if not myTeam then return end
+
+	local targetTeam
+
+	if myTeam.Name == "Yellow" then
+		targetTeam = "Green"
+	elseif myTeam.Name == "Green" then
+		targetTeam = "Yellow"
+	else
+		return
+	end
+
+	for _,player in pairs(Players:GetPlayers()) do
+
+		if player ~= LocalPlayer
+		and player.Team
+		and player.Team.Name == targetTeam
+		and player.Character then
+
+			local char = player.Character
+			local hrp = char:FindFirstChild("HumanoidRootPart")
+			local humanoid = char:FindFirstChildOfClass("Humanoid")
+
+			if hrp and humanoid and humanoid.Health > 0 then
+
+				angle += speed * 0.03
+
+				local offset = Vector3.new(
+					math.cos(angle) * radius,
+					0,
+					math.sin(angle) * radius
+				)
+
+				local targetPos = hrp.Position + offset
+				local newCFrame = CFrame.new(targetPos, hrp.Position)
+
+				myHRP.CFrame = myHRP.CFrame:Lerp(newCFrame, smoothness)
+
+				break
+			end
+		end
+	end
+end)
+
+-- ===================== Toggle =====================
+Tab:CreateToggle({
+	Name = "Auto Farm",
+	CurrentValue = false,
+	Flag = "AutoFarmToggle",
+	Callback = function(Value)
+		AutoFarmEnabled = Value
+	end,
+})
