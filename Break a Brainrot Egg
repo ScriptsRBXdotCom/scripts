@@ -1,0 +1,152 @@
+-- ===================== Copy key site to clipboard =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/key/')
+	end
+end)
+
+-- ===================== Load Rayfield UI =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ===================== Services =====================
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local EggsFolder = workspace:WaitForChild("EggRenderModels")
+local Event = ReplicatedStorage.Packages.Knit.Services.EggSpawnerService.RF.RequestHitEgg
+
+-- ===================== UI =====================
+local Window = Rayfield:CreateWindow({
+    Name = 'Auto Farm | ScriptsRBX',
+    LoadingTitle = 'ScriptsRBX.com Auto Farm',
+    LoadingSubtitle = 'ScriptsRBX',
+    Theme = 'Default',
+    ShowText = 'Auto Farm GUI',
+    ToggleUIKeybind = 'K',
+    KeySystem = false,
+})
+
+local Tab = Window:CreateTab('Main', 4483362458)
+
+-- ===================== Egg Finder =====================
+local function getEggPosition(egg)
+	local render = egg:FindFirstChild("RenderModel")
+	if not render then return nil end
+
+	if render:IsA("Model") then
+		local part = render.PrimaryPart or render:FindFirstChildWhichIsA("BasePart", true)
+		if part then
+			return part.Position
+		end
+	elseif render:IsA("BasePart") then
+		return render.Position
+	end
+end
+
+local function getClosestEgg()
+	local character = player.Character
+	if not character then return nil end
+
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not root then return nil end
+
+	local closestEgg = nil
+	local shortestDistance = math.huge
+
+	for _, egg in pairs(EggsFolder:GetChildren()) do
+		local pos = getEggPosition(egg)
+
+		if pos then
+			local distance = (root.Position - pos).Magnitude
+
+			if distance < shortestDistance then
+				shortestDistance = distance
+				closestEgg = egg
+			end
+		end
+	end
+
+	return closestEgg
+end
+
+-- ===================== Auto Hit Toggle =====================
+local AutoHit = false
+
+Tab:CreateToggle({
+	Name = "Auto Hit Nearby Eggs",
+	CurrentValue = false,
+	Callback = function(Value)
+		AutoHit = Value
+
+		if AutoHit then
+			task.spawn(function()
+				while AutoHit do
+					local egg = getClosestEgg()
+
+					if egg then
+						pcall(function()
+							Event:InvokeServer({
+								egg.Name,
+								"RenderModel"
+							})
+						end)
+					end
+
+					task.wait(0.1)
+				end
+			end)
+		end
+	end,
+})
+
+-- ===================== Teleport Button =====================
+Tab:CreateButton({
+	Name = "Teleport to Safe Zone",
+	Callback = function()
+		local character = player.Character
+		if character and character:FindFirstChild("HumanoidRootPart") then
+			local safe = workspace.World.Map.FloorDisplay
+			character.HumanoidRootPart.CFrame = safe.CFrame + Vector3.new(0,5,0)
+		end
+	end,
+})
+
+Tab:CreateButton({
+	Name = "Unlock Lucky Zone",
+	Callback = function()
+		local wall = workspace.World:FindFirstChild("PurchaseWall_Zone2")
+		if wall then
+			wall:Destroy()
+		end
+	end,
+})
+
+-- ===================== Auto Collect Money =====================
+local CollectEvent = game:GetService("ReplicatedStorage")
+	.Packages.Knit.Services.BaseService.RF.RequestPlatformCollect
+
+local AutoCollect = false
+
+Tab:CreateToggle({
+	Name = "Auto Collect Money",
+	CurrentValue = false,
+	Callback = function(Value)
+		AutoCollect = Value
+
+		if AutoCollect then
+			task.spawn(function()
+				while AutoCollect do
+					
+					for i = 1,16 do
+						pcall(function()
+							CollectEvent:InvokeServer(i)
+						end)
+					end
+
+					task.wait(3)
+				end
+			end)
+		end
+	end,
+})
