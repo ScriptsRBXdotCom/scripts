@@ -1,0 +1,276 @@
+-- ===================== Copy key site to clipboard =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/key/')
+	end
+end)
+
+-- ===================== Load Rayfield UI =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ===================== Services =====================
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+-- ===================== Remotes =====================
+local Remotes = ReplicatedStorage:WaitForChild("Paper"):WaitForChild("Remotes")
+local RemoteFunction = Remotes:WaitForChild("__remotefunction")
+local ThrowEvent = Remotes:WaitForChild("__remoteevent")
+
+-- ===================== UI =====================
+local Window = Rayfield:CreateWindow({
+    Name = 'Auto Farm | ScriptsRBX',
+    LoadingTitle = 'ScriptsRBX.com Auto Farm',
+    LoadingSubtitle = 'ScriptsRBX',
+    Theme = 'Default',
+    ShowText = 'Auto Farm GUI',
+    ToggleUIKeybind = 'K',
+    KeySystem = false,
+})
+
+local Tab = Window:CreateTab('Main', 4483362458)
+
+-- ===================== Camera Lock =====================
+local cameraEnabled = false
+local camConnection
+
+local function startCamera()
+	local char = player.Character or player.CharacterAdded:Wait()
+	local hum = char:WaitForChild("Humanoid")
+
+	camera.CameraType = Enum.CameraType.Custom
+	camera.CameraSubject = hum
+
+	camConnection = RunService.RenderStepped:Connect(function()
+		if cameraEnabled and camera.CameraSubject ~= hum then
+			camera.CameraSubject = hum
+		end
+	end)
+end
+
+Tab:CreateToggle({
+	Name = "Camera Lock",
+	CurrentValue = false,
+	Callback = function(v)
+		cameraEnabled = v
+		if v then startCamera() end
+	end,
+})
+
+-- ===================== Auto Equip =====================
+local autoEquip = false
+
+Tab:CreateToggle({
+	Name = "Auto Equip Best Pet",
+	CurrentValue = false,
+	Callback = function(v)
+		autoEquip = v
+		if v then
+			task.spawn(function()
+				while autoEquip do
+					pcall(function()
+						RemoteFunction:InvokeServer("Pet", {
+							Action = "EquipBest",
+							Sort = "Power"
+						})
+					end)
+					task.wait(5)
+				end
+			end)
+		end
+	end,
+})
+
+-- ===================== Auto Throw =====================
+local autoThrow = false
+
+Tab:CreateToggle({
+	Name = "Auto Throw Object",
+	CurrentValue = false,
+	Callback = function(v)
+		autoThrow = v
+		if v then
+			task.spawn(function()
+				while autoThrow do
+					pcall(function()
+						ThrowEvent:FireServer("Throw Object")
+					end)
+					task.wait(2)
+				end
+			end)
+		end
+	end,
+})
+-- ===================== REBIRTH SECTION =====================
+Tab:CreateLabel("===== AUTO REBIRTHS =====")
+
+local autoRebirth = false
+local currentIndex = nil
+
+local rebirthMap = {
+	[1] = 1,
+	[5] = 2,
+	[20] = 3,
+	[50] = 4,
+	[100] = 5,
+	[250] = 6,
+	[500] = 7,
+	[1000] = 8
+}
+
+-- 🔥 remove purchase prompt loop
+local function blockPurchasePrompt()
+	task.spawn(function()
+		while autoRebirth do
+			pcall(function()
+				local coreGui = game:GetService("CoreGui")
+				local prompt = coreGui:FindFirstChild("PurchasePromptApp")
+				if prompt then
+					prompt:Destroy()
+				end
+			end)
+			task.wait(0.5)
+		end
+	end)
+end
+
+local function startRebirth()
+	blockPurchasePrompt()
+
+	task.spawn(function()
+		while autoRebirth and currentIndex do
+			pcall(function()
+				RemoteFunction:InvokeServer("Rebirth", currentIndex)
+			end)
+			task.wait(2)
+		end
+	end)
+end
+
+-- Exclusive toggles
+local rebirthToggles = {}
+
+local function createRebirthToggle(amount)
+	local toggle
+	toggle = Tab:CreateToggle({
+		Name = "Auto Rebirth " .. amount,
+		CurrentValue = false,
+		Callback = function(v)
+			if v then
+				-- turn OFF others
+				for _, t in pairs(rebirthToggles) do
+					if t ~= toggle then
+						t:Set(false)
+					end
+				end
+
+				currentIndex = rebirthMap[amount]
+				autoRebirth = true
+				startRebirth()
+			else
+				autoRebirth = false
+				currentIndex = nil
+			end
+		end,
+	})
+	table.insert(rebirthToggles, toggle)
+end
+
+-- Create toggles
+createRebirthToggle(1)
+createRebirthToggle(5)
+createRebirthToggle(20)
+createRebirthToggle(50)
+createRebirthToggle(100)
+createRebirthToggle(250)
+createRebirthToggle(500)
+createRebirthToggle(1000)
+
+
+local ShopTab = Window:CreateTab('Shops', 4483362458)
+
+-- ===================== Open / Close Shop =====================
+local shopEnabled = false
+
+ShopTab:CreateToggle({
+	Name = "Open Objects Shop",
+	CurrentValue = false,
+	Callback = function(Value)
+		shopEnabled = Value
+		
+		local gui = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+			:WaitForChild("Menus")
+			:WaitForChild("ObjectsShop")
+
+		gui.Enabled = Value
+	end,
+})
+
+-- ===================== Merchant Toggle =====================
+ShopTab:CreateToggle({
+	Name = "Open Merchant",
+	CurrentValue = false,
+	Callback = function(Value)
+		local gui = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+			:WaitForChild("Menus")
+			:WaitForChild("Merchant")
+
+		gui.Enabled = Value
+	end,
+})
+
+-- ===================== Upgrades Toggle =====================
+ShopTab:CreateToggle({
+	Name = "Open Upgrades",
+	CurrentValue = false,
+	Callback = function(Value)
+		local gui = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+			:WaitForChild("Menus")
+			:WaitForChild("Upgrades")
+
+		gui.Enabled = Value
+	end,
+})
+
+-- ===================== Pet Enchant Toggle =====================
+ShopTab:CreateToggle({
+	Name = "Open Pet Enchant",
+	CurrentValue = false,
+	Callback = function(Value)
+		local gui = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+			:WaitForChild("Menus")
+			:WaitForChild("PetEnchant")
+
+		gui.Enabled = Value
+	end,
+})
+
+-- ===================== Golden Machine =====================
+ShopTab:CreateToggle({
+	Name = "Open Golden Machine",
+	CurrentValue = false,
+	Callback = function(Value)
+		local gui = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+			:WaitForChild("Menus")
+			:WaitForChild("GoldenMachine")
+
+		gui.Enabled = Value
+	end,
+})
+
+-- ===================== Rainbow Machine =====================
+ShopTab:CreateToggle({
+	Name = "Open Rainbow Machine",
+	CurrentValue = false,
+	Callback = function(Value)
+		local gui = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+			:WaitForChild("Menus")
+			:WaitForChild("RainbowMachine")
+
+		gui.Enabled = Value
+	end,
+})
