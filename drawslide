@@ -1,0 +1,153 @@
+-- ===================== Copy key site to clipboard =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/')
+	end
+end)
+
+-- ===================== Load Rayfield UI =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ===================== Key fetcher =====================
+local HttpService = game:GetService('HttpService')
+local function fetchKeys(url)
+	local ok, body = pcall(function()
+		return game:HttpGet(url)
+	end)
+	if not ok or not body then
+		return {}
+	end
+
+	local okJson, arr = pcall(function()
+		return HttpService:JSONDecode(body)
+	end)
+	if okJson and type(arr) == 'table' then
+		local out = {}
+		for _, k in ipairs(arr) do
+			if type(k) == 'string' and #k > 0 then
+				table.insert(out, k)
+			end
+		end
+		return out
+	end
+
+	local out = {}
+	body = body:gsub('\r', '\n')
+	for key in body:gmatch('[^\n,]+') do
+		key = key:match('^%s*(.-)%s*$')
+		if key ~= '' then
+			table.insert(out, key)
+		end
+	end
+	return out
+end
+
+local KEYS_URL =
+	'https://raw.githubusercontent.com/ScriptsRBXdotCom/scripts/refs/heads/main/Keys'
+local KEY_LIST = fetchKeys(KEYS_URL)
+if #KEY_LIST == 0 then
+	KEY_LIST = { 'ScriptsRBX-DFAD3' }
+end
+
+
+-- ===================== UI =====================
+local Window = Rayfield:CreateWindow({
+    Name = 'Auto Farm | ScriptsRBX',
+    LoadingTitle = 'ScriptsRBX.com Auto Farm',
+    LoadingSubtitle = 'ScriptsRBX',
+    Theme = 'Default',
+    ShowText = 'Auto Farm GUI',
+    ToggleUIKeybind = 'K',
+    KeySystem = false,
+})
+
+local Tab = Window:CreateTab('Main', 4483362458)
+local Crate = Window:CreateTab('Crate', 4483362458)
+
+
+-- ===================== Launch Boat Button =====================
+Tab:CreateButton({
+    Name = "Launch Boat (Singularity)",
+    Callback = function()
+        local Event = game:GetService("ReplicatedStorage").Events.LaunchBoat
+        
+        Event:FireServer(
+            {
+                {1,1,1,0,0,0,0,0,0,0},
+                {1,1,1,0,0,0,0,0,0,0},
+                {1,1,1,0,0,0,0,0,0,0},
+                {0,0,0,0,0,0,0,0,0,0},
+                {0,0,0,0,0,0,0,0,0,0},
+                {0,0,0,0,0,0,0,0,0,0},
+                {0,0,0,0,0,0,0,0,0,0},
+                {0,0,0,0,0,0,0,0,0,0},
+                {0,0,0,0,0,0,0,0,0,0},
+                {0,0,0,0,0,0,0,0,0,0}
+            },
+            "Singularity"
+        )
+    end,
+})
+
+-- ===================== Remove All Obstacles =====================
+Tab:CreateButton({
+    Name = "Remove All Obstacles",
+    Callback = function()
+        local stages = workspace:FindFirstChild("Stages")
+        if not stages then return end
+
+        -- Remove stages 1 → 10
+        for i = 1, 10 do
+            local stage = stages:FindFirstChild(tostring(i))
+            if stage and stage:FindFirstChild("Obstacles") then
+                stage.Obstacles:Destroy()
+            end
+        end
+
+        -- Remove End obstacles
+        local endStage = stages:FindFirstChild("End")
+        if endStage and endStage:FindFirstChild("Obstacles") then
+            endStage.Obstacles:Destroy()
+        end
+    end,
+})
+
+-- ===================== Open Upgrade Shop =====================
+Tab:CreateButton({
+    Name = "Open Upgrade Shop",
+    Callback = function()
+        local player = game:GetService("Players").LocalPlayer
+        
+        local event = player
+            :WaitForChild("PlayerGui")
+            :WaitForChild("Main")
+            :WaitForChild("Frames")
+            :WaitForChild("Upgrade")
+            :WaitForChild("CloseBtn")
+            :WaitForChild("OpenMenu")
+            :WaitForChild("RemoteOpen")
+
+        -- Fire the UI open signal
+        firesignal(event.OnClientEvent)
+    end,
+})
+
+-- ===================== Open Crates =====================
+local crateEvent = game:GetService("ReplicatedStorage"):WaitForChild("Events"):WaitForChild("RequestCrate")
+
+local crates = {
+    "Common",
+    "Uncommon",
+    "Rare",
+    "Epic",
+    "Legendary"
+}
+
+for _, crate in ipairs(crates) do
+    Crate:CreateButton({
+        Name = "Open " .. crate .. " Crate",
+        Callback = function()
+            crateEvent:FireServer(crate)
+        end,
+    })
+end
