@@ -1,0 +1,300 @@
+-- ===================== Copy key site to clipboard =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/key/')
+	end
+end)
+
+-- ===================== Load Rayfield UI =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ===================== Key fetcher =====================
+local HttpService = game:GetService('HttpService')
+local function fetchKeys(url)
+	local ok, body = pcall(function()
+		return game:HttpGet(url)
+	end)
+	if not ok or not body then
+		return {}
+	end
+
+	local okJson, arr = pcall(function()
+		return HttpService:JSONDecode(body)
+	end)
+	if okJson and type(arr) == 'table' then
+		local out = {}
+		for _, k in ipairs(arr) do
+			if type(k) == 'string' and #k > 0 then
+				table.insert(out, k)
+			end
+		end
+		return out
+	end
+
+	local out = {}
+	body = body:gsub('\r', '\n')
+	for key in body:gmatch('[^\n,]+') do
+		key = key:match('^%s*(.-)%s*$')
+		if key ~= '' then
+			table.insert(out, key)
+		end
+	end
+	return out
+end
+
+local KEYS_URL =
+	'https://raw.githubusercontent.com/ScriptsRBXdotCom/scripts/refs/heads/main/Keys'
+local KEY_LIST = fetchKeys(KEYS_URL)
+if #KEY_LIST == 0 then
+	KEY_LIST = { 'ScriptsRBX-DFAD3' }
+end
+
+
+-- ===================== UI =====================
+local Window = Rayfield:CreateWindow({
+    Name = 'Auto Farm | ScriptsRBX',
+    LoadingTitle = 'ScriptsRBX.com Auto Farm',
+    LoadingSubtitle = 'ScriptsRBX',
+    Theme = 'Default',
+    ShowText = 'Auto Farm GUI',
+    ToggleUIKeybind = 'K',
+    KeySystem = false,
+})
+
+local Tab = Window:CreateTab('Main', 4483362458)
+
+-- ===================== Services =====================
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Remotes = ReplicatedStorage:WaitForChild("SharedModules")
+	:WaitForChild("Network")
+	:WaitForChild("Remotes")
+
+local StrengthEvent = Remotes:WaitForChild("Activate Dumbell")
+local RebirthEvent = Remotes:WaitForChild("Rebirth")
+
+-- ===================== Auto Strength =====================
+local autoStrength = false
+
+Tab:CreateToggle({
+	Name = "Auto Strength",
+	CurrentValue = false,
+	Callback = function(Value)
+		autoStrength = Value
+
+		if Value then
+			task.spawn(function()
+				while autoStrength do
+					pcall(function()
+						StrengthEvent:FireServer()
+					end)
+					task.wait(0.5) -- 🔥 fast but safe
+				end
+			end)
+		end
+	end,
+})
+
+-- ===================== Auto Rebirth =====================
+local autoRebirth = false
+
+Tab:CreateToggle({
+	Name = "Auto Rebirth",
+	CurrentValue = false,
+	Callback = function(Value)
+		autoRebirth = Value
+
+		if Value then
+			task.spawn(function()
+				while autoRebirth do
+					pcall(function()
+						RebirthEvent:FireServer()
+					end)
+					task.wait(2) -- 🔥 avoid spam / popup issues
+				end
+			end)
+		end
+	end,
+})
+
+
+-- ===================== Auto Collect Money =====================
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local CollectEvent = ReplicatedStorage:WaitForChild("SharedModules")
+	:WaitForChild("Network")
+	:WaitForChild("Remotes")
+	:WaitForChild("Collect Earnings")
+
+local autoCollect = false
+
+Tab:CreateToggle({
+	Name = "Auto Collect Money",
+	CurrentValue = false,
+	Callback = function(Value)
+		autoCollect = Value
+
+		if Value then
+			task.spawn(function()
+				while autoCollect do
+					for i = 1, 11 do
+						if not autoCollect then break end
+
+						pcall(function()
+							CollectEvent:FireServer(tostring(i))
+						end)
+
+						task.wait(0.2) -- 🔥 fast loop between each
+					end
+
+					task.wait(1) -- 🔁 delay before repeating cycle
+				end
+			end)
+		end
+	end,
+})
+
+-- ===================== Teleport To Base =====================
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+local function getRoot()
+	local char = player.Character or player.CharacterAdded:Wait()
+	return char:WaitForChild("HumanoidRootPart")
+end
+
+Tab:CreateButton({
+	Name = "Teleport To Base",
+	Callback = function()
+		task.spawn(function()
+			local spawn = workspace:WaitForChild("Map"):WaitForChild("SpawnLocation")
+			local targetCFrame = spawn.CFrame + Vector3.new(0, 3, 0) -- slight offset
+
+			for i = 1, 20 do -- 🔁 tries multiple times
+				local root = getRoot()
+
+				-- teleport
+				root.CFrame = targetCFrame
+
+				-- check distance
+				local distance = (root.Position - spawn.Position).Magnitude
+				if distance < 5 then
+					break -- ✅ reached base
+				end
+
+				task.wait(0.2)
+			end
+		end)
+	end,
+})
+-- ===================== Lucky Block Teleport =====================
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+local function getRoot()
+	local char = player.Character or player.CharacterAdded:Wait()
+	return char:WaitForChild("HumanoidRootPart")
+end
+
+local friendsFolder = workspace:WaitForChild("Live"):WaitForChild("Friends")
+
+-- 🔥 get unique block names
+local function getUniqueBlocks()
+	local seen = {}
+	local list = {}
+
+	for _, obj in pairs(friendsFolder:GetChildren()) do
+		if not seen[obj.Name] then
+			seen[obj.Name] = true
+			table.insert(list, obj.Name)
+		end
+	end
+
+	return list
+end
+
+local selectedBlock = nil
+
+-- Dropdown
+local Dropdown = Tab:CreateDropdown({
+	Name = "Select Lucky Block",
+	Options = getUniqueBlocks(),
+	CurrentOption = {},
+	MultipleOptions = false,
+	Callback = function(Option)
+		selectedBlock = Option[1]
+	end,
+})
+
+-- Refresh button (in case blocks change)
+Tab:CreateButton({
+	Name = "Refresh Lucky Blocks",
+	Callback = function()
+		Dropdown:Refresh(getUniqueBlocks())
+	end,
+})
+
+-- Teleport button
+Tab:CreateButton({
+	Name = "Teleport To Lucky Block",
+	Callback = function()
+		if not selectedBlock then return end
+
+		local root = getRoot()
+
+		for _, obj in pairs(friendsFolder:GetChildren()) do
+			if obj.Name == selectedBlock and obj:IsA("Model") then
+				if obj:FindFirstChild("HumanoidRootPart") then
+					root.CFrame = obj.HumanoidRootPart.CFrame + Vector3.new(0, 3, 0)
+					break
+				elseif obj.PrimaryPart then
+					root.CFrame = obj.PrimaryPart.CFrame + Vector3.new(0, 3, 0)
+					break
+				end
+			end
+		end
+	end,
+})
+
+-- ===================== Movement Sliders =====================
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+local function getHumanoid()
+	local char = player.Character or player.CharacterAdded:Wait()
+	return char:WaitForChild("Humanoid")
+end
+
+-- WalkSpeed Slider
+Tab:CreateSlider({
+	Name = "WalkSpeed",
+	Range = {16, 200},
+	Increment = 1,
+	Suffix = "Speed",
+	CurrentValue = 16,
+	Callback = function(Value)
+		local humanoid = getHumanoid()
+		humanoid.WalkSpeed = Value
+	end,
+})
+
+-- JumpPower Slider
+Tab:CreateSlider({
+	Name = "JumpPower",
+	Range = {50, 200},
+	Increment = 1,
+	Suffix = "Jump",
+	CurrentValue = 50,
+	Callback = function(Value)
+		local humanoid = getHumanoid()
+		humanoid.JumpPower = Value
+	end,
+})
+
+-- Reapply on respawn
+player.CharacterAdded:Connect(function()
+	task.wait(1)
+	local humanoid = getHumanoid()
+	humanoid.WalkSpeed = 16
+	humanoid.JumpPower = 50
+end)
