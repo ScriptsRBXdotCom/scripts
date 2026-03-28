@@ -1,0 +1,155 @@
+-- ===================== Copy key site to clipboard =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/key/')
+	end
+end)
+
+-- ===================== Load Rayfield UI =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ===================== Key fetcher =====================
+local HttpService = game:GetService('HttpService')
+local function fetchKeys(url)
+	local ok, body = pcall(function()
+		return game:HttpGet(url)
+	end)
+	if not ok or not body then
+		return {}
+	end
+
+	local okJson, arr = pcall(function()
+		return HttpService:JSONDecode(body)
+	end)
+	if okJson and type(arr) == 'table' then
+		local out = {}
+		for _, k in ipairs(arr) do
+			if type(k) == 'string' and #k > 0 then
+				table.insert(out, k)
+			end
+		end
+		return out
+	end
+
+	local out = {}
+	body = body:gsub('\r', '\n')
+	for key in body:gmatch('[^\n,]+') do
+		key = key:match('^%s*(.-)%s*$')
+		if key ~= '' then
+			table.insert(out, key)
+		end
+	end
+	return out
+end
+
+local KEYS_URL =
+	'https://raw.githubusercontent.com/ScriptsRBXdotCom/scripts/refs/heads/main/Keys'
+local KEY_LIST = fetchKeys(KEYS_URL)
+if #KEY_LIST == 0 then
+	KEY_LIST = { 'ScriptsRBX-DFAD3' }
+end
+
+
+-- ===================== UI =====================
+local Window = Rayfield:CreateWindow({
+    Name = 'Auto Farm | ScriptsRBX',
+    LoadingTitle = 'ScriptsRBX.com Auto Farm',
+    LoadingSubtitle = 'ScriptsRBX',
+    Theme = 'Default',
+    ShowText = 'Auto Farm GUI',
+    ToggleUIKeybind = 'K',
+    KeySystem = false,
+})
+
+local Tab = Window:CreateTab('Main', 4483362458)
+
+
+-- ===================== Remote =====================
+local Event = game:GetService("ReplicatedStorage").Remote.Event.Race.AddCoinsOrWins
+
+-- ===================== Value Holder =====================
+local Amount = 100000 -- default
+
+-- ===================== Input =====================
+Tab:CreateInput({
+    Name = "Amount (Coins/Wins)",
+    PlaceholderText = "Enter amount...",
+    RemoveTextAfterFocusLost = false,
+    Callback = function(Text)
+        local num = tonumber(Text)
+        if num then
+            Amount = num
+        end
+    end,
+})
+
+-- ===================== Coins Button =====================
+Tab:CreateButton({
+    Name = "Give Coins",
+    Callback = function()
+        Event:FireServer(Amount, "Coins")
+    end,
+})
+
+-- ===================== Wins Button =====================
+Tab:CreateButton({
+    Name = "Give Wins",
+    Callback = function()
+        Event:FireServer(Amount, "Wins")
+    end,
+})
+
+-- ===================== Robux Egg Remote =====================
+local LuckEvent = game:GetService("ReplicatedStorage").Remote.Function.Luck["[C-S]doLuck"]
+
+-- ===================== Open 3 Robux Egg Button =====================
+Tab:CreateButton({
+    Name = "Open 3 Robux Egg",
+    Callback = function()
+        LuckEvent:InvokeServer(
+            "Robux_Egg1",
+            {},
+            3
+        )
+
+        -- Optional notification
+        Rayfield:Notify({
+            Title = "Egg Opened",
+            Content = "Opened 3 Robux Eggs",
+            Duration = 3,
+        })
+    end,
+})
+
+
+-- ===================== Car Shop Remote =====================
+local CarEvent = game:GetService("ReplicatedStorage").Remote.Function.CarShop["[C-S]BuyTool"]
+
+-- ===================== Individual Buttons =====================
+Tab:CreateButton({
+    Name = "Buy Robux Cart 1",
+    Callback = function()
+        CarEvent:InvokeServer("Robux Cart1")
+    end,
+})
+
+Tab:CreateButton({
+    Name = "Buy Robux Cart 2",
+    Callback = function()
+        CarEvent:InvokeServer("Robux Cart2")
+    end,
+})
+
+Tab:CreateButton({
+    Name = "Buy Robux Cart 3",
+    Callback = function()
+        CarEvent:InvokeServer("Robux Cart3")
+    end,
+})
+
+Tab:CreateButton({
+    Name = "Buy Robux Cart 4",
+    Callback = function()
+        CarEvent:InvokeServer("Robux Cart4")
+    end,
+})
