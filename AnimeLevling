@@ -1,7 +1,7 @@
 -- ===================== Copy key site to clipboard =====================
 pcall(function()
 	if setclipboard then
-		setclipboard('https://scriptsrbx.com/key/')
+		setclipboard('https://scriptsrbx.com/')
 	end
 end)
 
@@ -374,6 +374,27 @@ Gacha:CreateToggle({
     end,
 })
 
+-- ===================== HAKI AUTO LEVEL =====================
+
+local HakiRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("HakiLeveling")
+
+local AutoHaki = false
+
+Gacha:CreateToggle({
+    Name = "Auto Haki Level",
+    CurrentValue = false,
+    Flag = "AutoHaki",
+    Callback = function(value)
+        AutoHaki = value
+
+        Rayfield:Notify({
+            Title = "Haki",
+            Content = value and "Auto Level Enabled" or "Auto Level Disabled",
+            Duration = 2
+        })
+    end,
+})
+
 task.spawn(function()
     while true do
         if AutoRollEnabled then
@@ -394,10 +415,15 @@ task.spawn(function()
             end)
         end
 
+        if AutoHaki then
+            pcall(function()
+                HakiRemote:FireServer() -- Haki
+            end)
+        end
+
         task.wait(0.3)
     end
 end)
-
 
 -- ===================== STATS TAB =====================
 
@@ -479,5 +505,97 @@ task.spawn(function()
         end
 
         task.wait(1) -- runs every 1 second
+    end
+end)
+
+-- ===================== TOWER RAID AUTO FARM =====================
+
+local TowerFolder = workspace:WaitForChild("TowerRaid"):WaitForChild("Raid1"):WaitForChild("Enemy")
+
+local AutoTowerRaid = false
+
+-- Toggle
+AutoFarm:CreateToggle({
+    Name = "Auto Tower Raid",
+    CurrentValue = false,
+    Flag = "AutoTowerRaid",
+    Callback = function(value)
+        AutoTowerRaid = value
+
+        Rayfield:Notify({
+            Title = "Tower Raid",
+            Content = value and "Enabled" or "Disabled",
+            Duration = 2
+        })
+    end,
+})
+
+-- Get all raid enemies
+local function getTowerEnemies()
+    local list = {}
+
+    for _, enemy in ipairs(TowerFolder:GetChildren()) do
+        if enemy:IsA("Model") then
+            table.insert(list, enemy)
+        end
+    end
+
+    return list
+end
+
+-- TP function (reuse safe logic)
+local function teleportToRaidEnemy(enemy)
+    local char = game.Players.LocalPlayer.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+
+    local hrp = char.HumanoidRootPart
+
+    local target = enemy:FindFirstChild("HumanoidRootPart")
+        or enemy.PrimaryPart
+        or enemy:FindFirstChild("Head")
+
+    if target then
+        hrp.CFrame = target.CFrame * CFrame.new(0, 0, -3)
+    end
+end
+
+-- LOOP
+task.spawn(function()
+    while true do
+        if AutoTowerRaid then
+            
+            local enemies = getTowerEnemies()
+
+            for _, enemy in ipairs(enemies) do
+                if not AutoTowerRaid then break end
+                if not enemy or not enemy.Parent then continue end
+
+                teleportToRaidEnemy(enemy)
+
+                -- wait until dead (same system)
+                while AutoTowerRaid do
+                    local attr = enemy:GetAttribute("CurrentHP")
+
+                    local hp = 0
+                    if typeof(attr) == "string" then
+                        local _, val = string.match(attr, "([^;]+);([^;]+)")
+                        hp = tonumber(val) or 0
+                    end
+
+                    if hp <= 0 then
+                        break
+                    end
+
+                    -- OPTIONAL ATTACK
+                    -- game.ReplicatedStorage.Remotes.Clicked:FireServer()
+
+                    task.wait(0.15)
+                end
+
+                task.wait(0.2)
+            end
+        end
+
+        task.wait(0.2)
     end
 end)
