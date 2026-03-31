@@ -1,0 +1,236 @@
+-- ===================== Copy key site to clipboard =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/')
+	end
+end)
+
+-- ===================== Load Rayfield UI =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ===================== Key fetcher =====================
+local HttpService = game:GetService('HttpService')
+local function fetchKeys(url)
+	local ok, body = pcall(function()
+		return game:HttpGet(url)
+	end)
+	if not ok or not body then
+		return {}
+	end
+
+	local okJson, arr = pcall(function()
+		return HttpService:JSONDecode(body)
+	end)
+	if okJson and type(arr) == 'table' then
+		local out = {}
+		for _, k in ipairs(arr) do
+			if type(k) == 'string' and #k > 0 then
+				table.insert(out, k)
+			end
+		end
+		return out
+	end
+
+	local out = {}
+	body = body:gsub('\r', '\n')
+	for key in body:gmatch('[^\n,]+') do
+		key = key:match('^%s*(.-)%s*$')
+		if key ~= '' then
+			table.insert(out, key)
+		end
+	end
+	return out
+end
+
+local KEYS_URL =
+	'https://raw.githubusercontent.com/ScriptsRBXdotCom/scripts/refs/heads/main/Keys'
+local KEY_LIST = fetchKeys(KEYS_URL)
+if #KEY_LIST == 0 then
+	KEY_LIST = { 'ScriptsRBX-DFAD3' }
+end
+
+
+-- ===================== UI =====================
+local Window = Rayfield:CreateWindow({
+    Name = 'Auto Farm | ScriptsRBX',
+    LoadingTitle = 'ScriptsRBX.com Auto Farm',
+    LoadingSubtitle = 'ScriptsRBX',
+    Theme = 'Default',
+    ShowText = 'Auto Farm GUI',
+    ToggleUIKeybind = 'K',
+    KeySystem = false,
+})
+
+local Tab = Window:CreateTab('Main', 4483362458)
+
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+local workspace = game:GetService("Workspace")
+local SafeZone = workspace:WaitForChild("Misc"):WaitForChild("ShopsPart")
+
+local function getSafeCFrame()
+    if SafeZone:IsA("BasePart") then
+        return SafeZone.CFrame
+    elseif SafeZone:IsA("Model") then
+        return SafeZone:GetPivot()
+    end
+end
+
+Tab:CreateButton({
+    Name = "Teleport to Safezone",
+    Callback = function()
+        local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+        local hrp = char:WaitForChild("HumanoidRootPart")
+
+        local cf = getSafeCFrame()
+        if cf then
+            hrp.CFrame = cf + Vector3.new(0,3,0)
+        end
+
+        Rayfield:Notify({
+            Title = "Teleported",
+            Content = "You are now in Safezone",
+            Duration = 2
+        })
+    end,
+})
+
+-- ===================== BRAINROT UI SYSTEM =====================
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+local BrainrotFolder = workspace:WaitForChild("Brainrots")
+
+local SelectedBrainrot = nil
+local SelectedRarity = "All"
+
+local BrainrotDropdown
+
+-- ===================== GET DATA =====================
+
+local function getBrainrots()
+    local list = {}
+
+    for _, brainrot in ipairs(BrainrotFolder:GetChildren()) do
+        if brainrot:IsA("Model") then
+            
+            local rarity = brainrot:GetAttribute("Rarity") or "Unknown"
+            local mutation = brainrot:GetAttribute("Mutation") or "None"
+            local name = brainrot:GetAttribute("Index") or brainrot.Name
+
+            -- filter by rarity
+            if SelectedRarity == "All" or rarity == SelectedRarity then
+                table.insert(list, name .. " | " .. rarity .. " | " .. mutation)
+            end
+        end
+    end
+
+    return list
+end
+
+-- find actual model from string
+local function findBrainrotFromString(str)
+    for _, brainrot in ipairs(BrainrotFolder:GetChildren()) do
+        if brainrot:IsA("Model") then
+            local name = brainrot:GetAttribute("Index") or brainrot.Name
+            local rarity = brainrot:GetAttribute("Rarity") or "Unknown"
+            local mutation = brainrot:GetAttribute("Mutation") or "None"
+
+            local full = name .. " | " .. rarity .. " | " .. mutation
+
+            if full == str then
+                return brainrot
+            end
+        end
+    end
+end
+
+-- ===================== DROPDOWN =====================
+
+BrainrotDropdown = Tab:CreateDropdown({
+    Name = "Select Brainrot",
+    Options = getBrainrots(),
+    CurrentOption = {},
+    MultipleOptions = false,
+    Flag = "BrainrotSelect",
+    Callback = function(option)
+        SelectedBrainrot = option[1]
+    end,
+})
+
+-- ===================== RARITY FILTER =====================
+
+Tab:CreateDropdown({
+    Name = "Filter by Rarity",
+Options = {
+    "All",
+    "Common",
+    "Rare",
+    "Epic",
+    "Legendary",
+    "Mythic",
+    "Divine",
+    "Secret",
+    "Brainrot God",
+    "OG",
+    "MEME"
+},    CurrentOption = {"All"},
+    MultipleOptions = false,
+    Flag = "RarityFilter",
+    Callback = function(option)
+        SelectedRarity = option[1]
+
+        local newList = getBrainrots()
+        BrainrotDropdown:Refresh(newList, true)
+    end,
+})
+
+-- ===================== REFRESH =====================
+
+Tab:CreateButton({
+    Name = "Refresh Brainrots",
+    Callback = function()
+        BrainrotDropdown:Refresh(getBrainrots(), true)
+
+        Rayfield:Notify({
+            Title = "Refreshed",
+            Content = "Brainrot list updated",
+            Duration = 2
+        })
+    end,
+})
+
+-- ===================== TELEPORT =====================
+
+Tab:CreateButton({
+    Name = "Teleport to Brainrot",
+    Callback = function()
+        if not SelectedBrainrot then
+            Rayfield:Notify({
+                Title = "Error",
+                Content = "Select a brainrot first",
+                Duration = 2
+            })
+            return
+        end
+
+        local brainrot = findBrainrotFromString(SelectedBrainrot)
+
+        if brainrot then
+            local char = LocalPlayer.Character
+            if char and char:FindFirstChild("HumanoidRootPart") then
+                
+                local target = brainrot:FindFirstChild("HumanoidRootPart")
+                    or brainrot.PrimaryPart
+                    or brainrot:FindFirstChild("Head")
+
+                if target then
+                    char.HumanoidRootPart.CFrame = target.CFrame * CFrame.new(0,0,-3)
+                end
+            end
+        end
+    end,
+})
