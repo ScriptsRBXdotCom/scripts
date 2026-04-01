@@ -1,0 +1,233 @@
+-- ===================== Copy key site to clipboard =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/')
+	end
+end)
+
+-- ===================== Load Rayfield UI =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ===================== Key fetcher =====================
+local HttpService = game:GetService('HttpService')
+local function fetchKeys(url)
+	local ok, body = pcall(function()
+		return game:HttpGet(url)
+	end)
+	if not ok or not body then
+		return {}
+	end
+
+	local okJson, arr = pcall(function()
+		return HttpService:JSONDecode(body)
+	end)
+	if okJson and type(arr) == 'table' then
+		local out = {}
+		for _, k in ipairs(arr) do
+			if type(k) == 'string' and #k > 0 then
+				table.insert(out, k)
+			end
+		end
+		return out
+	end
+
+	local out = {}
+	body = body:gsub('\r', '\n')
+	for key in body:gmatch('[^\n,]+') do
+		key = key:match('^%s*(.-)%s*$')
+		if key ~= '' then
+			table.insert(out, key)
+		end
+	end
+	return out
+end
+
+local KEYS_URL =
+	'https://raw.githubusercontent.com/ScriptsRBXdotCom/scripts/refs/heads/main/Keys'
+local KEY_LIST = fetchKeys(KEYS_URL)
+if #KEY_LIST == 0 then
+	KEY_LIST = { 'ScriptsRBX-DFAD3' }
+end
+
+
+-- ===================== UI =====================
+local Window = Rayfield:CreateWindow({
+    Name = 'Auto Farm | ScriptsRBX',
+    LoadingTitle = 'ScriptsRBX.com Auto Farm',
+    LoadingSubtitle = 'ScriptsRBX',
+    Theme = 'Default',
+    ShowText = 'Auto Farm GUI',
+    ToggleUIKeybind = 'K',
+    KeySystem = false,
+})
+
+local Tab = Window:CreateTab('Main', 4483362458)
+-- ===================== SERVICES =====================
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+-- ===================== BRAINROT ZONE SYSTEM =====================
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+local BrainrotsFolder = workspace:WaitForChild("Brainrots")
+
+local SelectedZone = "Zone1"
+local SelectedBrainrot = nil
+
+local BrainrotDropdown
+
+-- ===================== HELPERS =====================
+
+local function getZoneFolder()
+    return BrainrotsFolder:FindFirstChild(SelectedZone)
+end
+
+local function getBrainrotsInZone()
+    local zone = getZoneFolder()
+    if not zone then return {} end
+
+    local list = {}
+
+    for _, brainrot in ipairs(zone:GetChildren()) do
+        if brainrot:IsA("Model") then
+            table.insert(list, brainrot.Name)
+        end
+    end
+
+    return list
+end
+
+local function findBrainrot(name)
+    local zone = getZoneFolder()
+    if not zone then return end
+
+    return zone:FindFirstChild(name)
+end
+
+local function tpTo(model)
+    local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    local hrp = char:WaitForChild("HumanoidRootPart")
+
+    local cf
+
+    if model:IsA("Model") then
+        -- BEST method (works even without PrimaryPart)
+        cf = model:GetPivot()
+    elseif model:IsA("BasePart") then
+        cf = model.CFrame
+    end
+
+    if cf then
+        hrp.CFrame = cf + Vector3.new(0, 3, 0)
+    else
+        warn("No CFrame found for:", model.Name)
+    end
+end
+-- ===================== ZONE DROPDOWN =====================
+
+Tab:CreateDropdown({
+    Name = "Select Zone",
+    Options = {
+        "Zone1","Zone2","Zone3","Zone4","Zone5",
+        "Zone6","Zone7","Zone8","Zone9","Zone10"
+    },
+    CurrentOption = {"Zone1"},
+    MultipleOptions = false,
+    Callback = function(option)
+        SelectedZone = option[1]
+        SelectedBrainrot = nil
+
+        -- refresh brainrot list
+        local newList = getBrainrotsInZone()
+        BrainrotDropdown:Refresh(newList, true)
+    end,
+})
+
+-- ===================== BRAINROT DROPDOWN =====================
+
+BrainrotDropdown = Tab:CreateDropdown({
+    Name = "Select Brainrot",
+    Options = getBrainrotsInZone(),
+    CurrentOption = {},
+    MultipleOptions = false,
+    Callback = function(option)
+        SelectedBrainrot = option[1]
+    end,
+})
+
+-- ===================== REFRESH =====================
+
+Tab:CreateButton({
+    Name = "🔄 Refresh Brainrots",
+    Callback = function()
+        BrainrotDropdown:Refresh(getBrainrotsInZone(), true)
+    end,
+})
+
+-- ===================== TELEPORT BUTTON =====================
+
+Tab:CreateButton({
+    Name = "Teleport to Brainrot",
+    Callback = function()
+        if not SelectedBrainrot then
+            Rayfield:Notify({
+                Title = "Error",
+                Content = "Select a brainrot first",
+                Duration = 2
+            })
+            return
+        end
+
+        local brainrot = findBrainrot(SelectedBrainrot)
+
+        if brainrot then
+            tpTo(brainrot)
+
+            Rayfield:Notify({
+                Title = "Teleported",
+                Content = SelectedZone .. " → " .. SelectedBrainrot,
+                Duration = 2
+            })
+        else
+            Rayfield:Notify({
+                Title = "Error",
+                Content = "Brainrot not found",
+                Duration = 2
+            })
+        end
+    end,
+})
+
+Tab:CreateButton({
+    Name = "Teleport to My Plot",
+    Callback = function()
+        local plots = workspace:WaitForChild("Plots")
+
+        for _, plot in ipairs(plots:GetChildren()) do
+            if plot:IsA("Model") then
+                local owner = plot:GetAttribute("TakenBy")
+
+                if owner == LocalPlayer.Name then
+                    tpTo(plot)
+
+                    Rayfield:Notify({
+                        Title = "Plot Found",
+                        Content = "Teleported to your plot",
+                        Duration = 2
+                    })
+
+                    return
+                end
+            end
+        end
+
+        Rayfield:Notify({
+            Title = "Error",
+            Content = "Your plot not found",
+            Duration = 2
+        })
+    end,
+})
