@@ -1,0 +1,138 @@
+-- ===================== Copy key site to clipboard =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/key/')
+	end
+end)
+
+-- ===================== Load Rayfield UI =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ===================== Services =====================
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local EggsFolder = workspace:WaitForChild("EggRenderModels")
+local Event = ReplicatedStorage.Packages.Knit.Services.EggSpawnerService.RF.RequestHitEgg
+
+-- ===================== UI =====================
+local Window = Rayfield:CreateWindow({
+    Name = 'Auto Farm | ScriptsRBX',
+    LoadingTitle = 'ScriptsRBX.com Auto Farm',
+    LoadingSubtitle = 'ScriptsRBX',
+    Theme = 'Default',
+    ShowText = 'Auto Farm GUI',
+    ToggleUIKeybind = 'K',
+    KeySystem = false,
+})
+
+local Tab = Window:CreateTab('Main', 4483362458)
+
+-- ===================== AUTO STEP =====================
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local StepRemote = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("StepTaken")
+
+local AutoStep = false
+
+-- LOOP
+task.spawn(function()
+    while true do
+        if AutoStep then
+            pcall(function()
+                StepRemote:FireServer()
+            end)
+
+            task.wait(0.1) -- speed (adjust if needed)
+        else
+            task.wait(0.3)
+        end
+    end
+end)
+
+
+Tab:CreateToggle({
+    Name = "Auto Step",
+    CurrentValue = false,
+    Flag = "AutoStepToggle",
+    Callback = function(value)
+        AutoStep = value
+
+        Rayfield:Notify({
+            Title = "Auto Step",
+            Content = value and "Enabled" or "Disabled",
+            Duration = 2
+        })
+    end,
+})
+
+
+Tab:CreateButton({
+    Name = "Wins All Duels",
+    Callback = function()
+        local ReplicatedStorage = game:GetService("ReplicatedStorage")
+        local DuelRemote = ReplicatedStorage:WaitForChild("RemoteEvents"):WaitForChild("DuelEnd")
+
+        Rayfield:Notify({
+            Title = "Duels",
+            Content = "Firing all duel wins...",
+            Duration = 2
+        })
+
+        for i = 1, 50 do
+            pcall(function()
+                DuelRemote:FireServer(true, i)
+            end)
+
+            task.wait(0.05) -- small delay to avoid spam detection
+        end
+
+        Rayfield:Notify({
+            Title = "Duels",
+            Content = "Finished all duels!",
+            Duration = 2
+        })
+    end,
+})
+
+local player = game:GetService("Players").LocalPlayer
+
+player.CharacterAdded:Connect(function(char)
+    local humanoid = char:WaitForChild("Humanoid")
+
+    task.wait(0.5) -- wait for full load
+
+    humanoid.WalkSpeed = Rayfield.Flags.WalkSpeedSlider.CurrentValue
+    humanoid.JumpPower = Rayfield.Flags.JumpPowerSlider.CurrentValue
+end)
+
+Tab:CreateSlider({
+    Name = "WalkSpeed",
+    Range = {16, 200},
+    Increment = 1,
+    Suffix = "Speed",
+    CurrentValue = 16,
+    Flag = "WalkSpeedSlider",
+    Callback = function(value)
+        local player = game:GetService("Players").LocalPlayer
+        if player.Character and player.Character:FindFirstChild("Humanoid") then
+            player.Character.Humanoid.WalkSpeed = value
+        end
+    end,
+})
+
+Tab:CreateSlider({
+    Name = "JumpPower",
+    Range = {50, 200},
+    Increment = 1,
+    Suffix = "Jump",
+    CurrentValue = 50,
+    Flag = "JumpPowerSlider",
+    Callback = function(value)
+        local player = game:GetService("Players").LocalPlayer
+        if player.Character and player.Character:FindFirstChild("Humanoid") then
+            player.Character.Humanoid.JumpPower = value
+        end
+    end,
+})
