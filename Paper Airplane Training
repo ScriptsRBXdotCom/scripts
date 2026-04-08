@@ -1,0 +1,97 @@
+-- ===================== Copy key site to clipboard =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/')
+	end
+end)
+
+-- ===================== Load Rayfield UI =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ===================== Services =====================
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+-- ===================== UI =====================
+local Window = Rayfield:CreateWindow({
+    Name = 'Paper Airplane Training | ScriptsRBX',
+    LoadingTitle = 'ScriptsRBX.com Auto Farm',
+    LoadingSubtitle = 'ScriptsRBX',
+    Theme = 'Default',
+    ShowText = 'Auto Farm GUI',
+    ToggleUIKeybind = 'K',
+    KeySystem = false,
+})
+
+local Tab = Window:CreateTab('Main', 4483362458)
+local moneyAmount = 100000000000 -- default
+
+Tab:CreateInput({
+    Name = "Money Amount",
+    PlaceholderText = "Enter amount...",
+    RemoveTextAfterFocusLost = false,
+    Callback = function(text)
+        local num = tonumber(text)
+        if num then
+            moneyAmount = num
+        else
+            Rayfield:Notify({
+                Title = "Error",
+                Content = "Invalid number",
+                Duration = 2
+            })
+        end
+    end,
+})
+
+Tab:CreateButton({
+    Name = "Give Money",
+    Callback = function()
+        local Event = game:GetService("ReplicatedStorage").Remote.Event.Eco["[C-S]FlightReward"]
+
+        pcall(function()
+            Event:FireServer(moneyAmount)
+        end)
+
+        Rayfield:Notify({
+            Title = "Money",
+            Content = "Sent: " .. tostring(moneyAmount),
+            Duration = 2
+        })
+    end,
+})
+
+local AutoRebirth = false
+
+Tab:CreateToggle({
+    Name = "Auto Rebirth",
+    CurrentValue = false,
+    Flag = "AutoRebirthToggle",
+    Callback = function(value)
+        AutoRebirth = value
+
+        Rayfield:Notify({
+            Title = "Rebirth",
+            Content = value and "Enabled" or "Disabled",
+            Duration = 2
+        })
+    end,
+})
+
+-- LOOP
+task.spawn(function()
+    local Event = game:GetService("ReplicatedStorage").Remote.Event.Rebirth["[C-S]RebirthRequest"]
+
+    while true do
+        if AutoRebirth then
+            pcall(function()
+                Event:FireServer()
+            end)
+
+            task.wait(0.5) -- adjust speed if needed
+        else
+            task.wait(1)
+        end
+    end
+end)
