@@ -1,0 +1,193 @@
+-- ===================== Load Rayfield =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+	Name = "ScriptsRBX | Auto Farm",
+	LoadingTitle = "ScriptsRBX",
+	LoadingSubtitle = "Premium Hub",
+	ShowText = "ScriptsRBX",
+	ToggleUIKeybind = "K",
+	Theme = "DarkBlue"
+})
+
+-- ===================== Tabs =====================
+local MainTab = Window:CreateTab("Main", "home")
+local BrainrotTab = Window:CreateTab("Brainrots", "brain")
+local LuckyTab = Window:CreateTab("LuckyBlocks", "gift")
+local EventTab = Window:CreateTab("Events", "egg")
+
+local player = game:GetService("Players").LocalPlayer
+
+-- ===================== MAIN =====================
+MainTab:CreateSection("Farming")
+
+MainTab:CreateButton({
+	Name = "Delete All Dirty Tiles",
+	Callback = function()
+		local f = workspace:FindFirstChild("PowerWashTargets")
+		if f then f:Destroy() end
+	end
+})
+
+local autoMoney = false
+MainTab:CreateToggle({
+	Name = "Auto Collect Money",
+	CurrentValue = false,
+	Callback = function(v)
+		autoMoney = v
+		if v then
+			task.spawn(function()
+				while autoMoney do
+					for i = 1, 20 do
+						pcall(function()
+							game.ReplicatedStorage.Events.PlotHandler:FireServer("Collect", i)
+						end)
+						task.wait(0.2)
+					end
+				end
+			end)
+		end
+	end
+})
+
+MainTab:CreateSection("Teleport")
+
+MainTab:CreateButton({
+	Name = "Teleport To My Plot",
+	Callback = function()
+		for _, plot in pairs(workspace.Game.Plots:GetChildren()) do
+			if plot:GetAttribute("OwnerUserId") == player.UserId then
+				local part = plot.PrimaryPart or plot:FindFirstChildWhichIsA("BasePart")
+				if part then
+					player.Character.HumanoidRootPart.CFrame = part.CFrame + Vector3.new(0,5,0)
+				end
+			end
+		end
+	end
+})
+
+-- ===================== BRAINROTS =====================
+local brainrotFolder = workspace.Game.Brainrots
+
+local function getBrainrots()
+	local t, seen = {}, {}
+	for _, v in pairs(brainrotFolder:GetChildren()) do
+		if not seen[v.Name] then
+			seen[v.Name] = true
+			table.insert(t, v.Name)
+		end
+	end
+	return t
+end
+
+BrainrotTab:CreateSection("Teleport")
+
+local currentBrainList = getBrainrots()
+
+local BrainDropdown = BrainrotTab:CreateDropdown({
+	Name = "Teleport to Brainrot",
+	Options = currentBrainList,
+	CurrentOption = nil,
+	Callback = function(opt)
+		local name = type(opt) == "table" and opt[1] or opt
+
+		local target = brainrotFolder:FindFirstChild(name)
+		if target then
+			local part = target:FindFirstChildWhichIsA("BasePart")
+			if part then
+				player.Character.HumanoidRootPart.CFrame = part.CFrame + Vector3.new(0,5,0)
+			end
+		end
+	end
+})
+
+BrainrotTab:CreateButton({
+	Name = "Refresh",
+	Callback = function()
+		currentBrainList = getBrainrots()
+
+		-- SAFE UPDATE (no stacking, no error)
+		pcall(function()
+			BrainDropdown:Refresh(currentBrainList)
+		end)
+	end
+})
+
+-- ===================== LUCKY BLOCKS =====================
+local luckyFolder = workspace.Game.LuckyBlocks
+
+local function getLucky()
+	local t, seen = {}, {}
+	for _, v in pairs(luckyFolder:GetChildren()) do
+		if not seen[v.Name] then
+			seen[v.Name] = true
+			table.insert(t, v.Name)
+		end
+	end
+	return t
+end
+
+LuckyTab:CreateSection("Teleport")
+
+local currentLuckyList = getLucky()
+
+local LuckyDropdown = LuckyTab:CreateDropdown({
+	Name = "Teleport to LuckyBlock",
+	Options = currentLuckyList,
+	CurrentOption = nil,
+	Callback = function(opt)
+		local name = type(opt) == "table" and opt[1] or opt
+
+		local target = luckyFolder:FindFirstChild(name)
+		if target then
+			local part = target:FindFirstChildWhichIsA("BasePart")
+			if part then
+				player.Character.HumanoidRootPart.CFrame = part.CFrame + Vector3.new(0,5,0)
+			end
+		end
+	end
+})
+
+LuckyTab:CreateButton({
+	Name = "Refresh",
+	Callback = function()
+		currentLuckyList = getLucky()
+
+		pcall(function()
+			LuckyDropdown:Refresh(currentLuckyList)
+		end)
+	end
+})
+
+-- ===================== EVENTS =====================
+EventTab:CreateSection("Auto Farm")
+
+local autoEggs = false
+
+EventTab:CreateToggle({
+	Name = "Auto Collect Easter Eggs",
+	CurrentValue = false,
+	Callback = function(v)
+		autoEggs = v
+		if v then
+			task.spawn(function()
+				while autoEggs do
+					for _, egg in pairs(workspace.Events.EasterEggs:GetChildren()) do
+						if not autoEggs then break end
+
+						local cube = egg:FindFirstChild("Cube")
+						local prompt = cube and cube:FindFirstChild("PickUpPrompt")
+
+						if cube and prompt then
+							player.Character.HumanoidRootPart.CFrame = cube.CFrame + Vector3.new(0,3,0)
+							task.wait(0.2)
+							fireproximityprompt(prompt)
+							task.wait(0.3)
+						end
+					end
+					task.wait(1)
+				end
+			end)
+		end
+	end
+})
