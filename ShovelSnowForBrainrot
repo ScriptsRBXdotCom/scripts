@@ -1,0 +1,241 @@
+-- ===================== Load Rayfield =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+local Window = Rayfield:CreateWindow({
+	Name = "ScriptsRBX | Brainrot Farm",
+	LoadingTitle = "ScriptsRBX",
+	LoadingSubtitle = "Premium",
+	ToggleUIKeybind = "K",
+	Theme = "DarkBlue"
+})
+
+-- ===================== Tabs =====================
+local MainTab = Window:CreateTab("Main", "home")
+local BrainrotTab = Window:CreateTab("Brainrots", "brain")
+local FarmTab = Window:CreateTab("Auto Farm", "zap")
+local UpgradeTab = Window:CreateTab("Upgrades", "trending-up")
+
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+-- ===================== GET PLOT =====================
+local function getMyPlot()
+	for _, plot in pairs(workspace.Bases:GetChildren()) do
+		if plot:GetAttribute("Owner") == player.Name then
+			return plot
+		end
+	end
+end
+
+local function tpToPlot()
+	local plot = getMyPlot()
+	if plot then
+		local part = plot.PrimaryPart or plot:FindFirstChildWhichIsA("BasePart")
+		if part then
+			player.Character.HumanoidRootPart.CFrame = part.CFrame + Vector3.new(0,5,0)
+		end
+	end
+end
+
+-- ===================== MAIN =====================
+MainTab:CreateSection("Player")
+
+MainTab:CreateButton({
+	Name = "Teleport To My Plot",
+	Callback = tpToPlot
+})
+
+
+
+MainTab:CreateSection("World")
+
+-- Delete Snow
+MainTab:CreateButton({
+	Name = "Delete Snow",
+	Callback = function()
+		local snow = workspace:FindFirstChild("Snow")
+		if snow then
+			snow:Destroy()
+			Rayfield:Notify({
+				Title = "Done",
+				Content = "Snow deleted",
+				Duration = 2
+			})
+		else
+			Rayfield:Notify({
+				Title = "Error",
+				Content = "Snow not found",
+				Duration = 2
+			})
+		end
+	end
+})
+
+
+-- Auto Collect Cash
+local autoCash = false
+
+MainTab:CreateToggle({
+	Name = "Auto Collect Cash",
+	CurrentValue = false,
+	Callback = function(v)
+		autoCash = v
+		
+		if v then
+			task.spawn(function()
+				while autoCash do
+					local folder = workspace:FindFirstChild("Cash")
+					local char = player.Character or player.CharacterAdded:Wait()
+					local hrp = char:WaitForChild("HumanoidRootPart")
+
+					if folder then
+						for _, cash in pairs(folder:GetChildren()) do
+							if not autoCash then break end
+
+							if cash:IsA("BasePart") or cash:IsA("MeshPart") then
+								hrp.CFrame = cash.CFrame + Vector3.new(0,2,0)
+								task.wait(0.1)
+							end
+						end
+					end
+
+					task.wait(0.2)
+				end
+			end)
+		end
+	end
+})
+
+-- ===================== BRAINROTS =====================
+local brainrotFolder = workspace:WaitForChild("Brainrots")
+
+local function getBrainrots()
+	local t, seen = {}, {}
+	for _, v in pairs(brainrotFolder:GetChildren()) do
+		if not seen[v.Name] then
+			seen[v.Name] = true
+			table.insert(t, v.Name)
+		end
+	end
+	return t
+end
+
+BrainrotTab:CreateSection("Teleport")
+
+local BrainDropdown = BrainrotTab:CreateDropdown({
+	Name = "Teleport to Brainrot",
+	Options = getBrainrots(),
+	CurrentOption = nil,
+	Callback = function(opt)
+		local name = type(opt) == "table" and opt[1] or opt
+
+		local target = brainrotFolder:FindFirstChild(name)
+		if target then
+			local part = target.PrimaryPart or target:FindFirstChildWhichIsA("BasePart")
+			if part then
+				player.Character.HumanoidRootPart.CFrame = part.CFrame + Vector3.new(0,5,0)
+			end
+		end
+	end
+})
+
+BrainrotTab:CreateButton({
+	Name = "Refresh",
+	Callback = function()
+		pcall(function()
+			BrainDropdown:Refresh(getBrainrots())
+		end)
+	end
+})
+
+-- ===================== AUTO FARM =====================
+FarmTab:CreateSection("Auto Pickup")
+
+local autoFarm = false
+
+FarmTab:CreateToggle({
+	Name = "Auto Pickup Mythic + Secret",
+	CurrentValue = false,
+	Callback = function(v)
+		autoFarm = v
+		
+		if v then
+			task.spawn(function()
+				while autoFarm do
+					for _, brainrot in pairs(brainrotFolder:GetChildren()) do
+						if not autoFarm then break end
+
+						local rarity = brainrot:GetAttribute("RarityType")
+
+						if rarity == "Mythic" or rarity == "Secret" then
+							local mesh = brainrot:FindFirstChild("Mesh")
+							local prompt = mesh and mesh:FindFirstChild("PickupPrompt")
+
+							if mesh and prompt then
+								local hrp = player.Character.HumanoidRootPart
+
+								hrp.CFrame = mesh.CFrame + Vector3.new(0,3,0)
+								task.wait(0.2)
+
+								fireproximityprompt(prompt)
+								task.wait(0.3)
+
+								tpToPlot()
+								task.wait(0.3)
+							end
+						end
+					end
+
+					task.wait(1)
+				end
+			end)
+		end
+	end
+})
+
+-- ===================== UPGRADES =====================
+UpgradeTab:CreateSection("Auto Upgrade")
+
+-- Auto Damage 500
+local autoDamage = false
+
+UpgradeTab:CreateToggle({
+	Name = "Auto Upgrade Damage (500)",
+	CurrentValue = false,
+	Callback = function(v)
+		autoDamage = v
+		
+		if v then
+			task.spawn(function()
+				while autoDamage do
+					pcall(function()
+						game:GetService("ReplicatedStorage").Remotes.BuyUpgradeEvent:FireServer("Damage", 500)
+					end)
+					task.wait(1)
+				end
+			end)
+		end
+	end
+})
+
+-- Auto Rebirth
+local autoRebirth = false
+
+UpgradeTab:CreateToggle({
+	Name = "Auto Rebirth",
+	CurrentValue = false,
+	Callback = function(v)
+		autoRebirth = v
+		
+		if v then
+			task.spawn(function()
+				while autoRebirth do
+					pcall(function()
+						game:GetService("ReplicatedStorage").Remotes.RebirthEvent:FireServer()
+					end)
+					task.wait(2)
+				end
+			end)
+		end
+	end
+})
