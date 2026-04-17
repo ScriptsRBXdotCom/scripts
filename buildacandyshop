@@ -1,0 +1,88 @@
+-- ===================== Copy key site to clipboard =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/key/')
+	end
+end)
+
+-- ===================== Load Rayfield UI =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ===================== Key fetcher =====================
+local HttpService = game:GetService('HttpService')
+local function fetchKeys(url)
+	local ok, body = pcall(function()
+		return game:HttpGet(url)
+	end)
+	if not ok or not body then
+		return {}
+	end
+
+	local okJson, arr = pcall(function()
+		return HttpService:JSONDecode(body)
+	end)
+	if okJson and type(arr) == 'table' then
+		local out = {}
+		for _, k in ipairs(arr) do
+			if type(k) == 'string' and #k > 0 then
+				table.insert(out, k)
+			end
+		end
+		return out
+	end
+
+	local out = {}
+	body = body:gsub('\r', '\n')
+	for key in body:gmatch('[^\n,]+') do
+		key = key:match('^%s*(.-)%s*$')
+		if key ~= '' then
+			table.insert(out, key)
+		end
+	end
+	return out
+end
+
+local KEYS_URL =
+	'https://raw.githubusercontent.com/ScriptsRBXdotCom/scripts/refs/heads/main/Keys'
+local KEY_LIST = fetchKeys(KEYS_URL)
+if #KEY_LIST == 0 then
+	KEY_LIST = { 'ScriptsRBX-DFAD3' }
+end
+
+-- ===================== UI =====================
+local Window = Rayfield:CreateWindow({
+	Name = 'Auto Farm | ScriptsRBX',
+	LoadingTitle = 'ScriptsRBX.com Auto Farm',
+	LoadingSubtitle = 'ScriptsRBX',
+	Theme = 'Default',
+	ShowText = 'Auto Farm GUI',
+	ToggleUIKeybind = 'K',
+	KeySystem = false,
+})
+
+local Tab = Window:CreateTab('Main', 4483362458)
+
+Tab:CreateButton({
+	Name = "Collect Forever Pack (Free)",
+	Callback = function()
+		task.spawn(function()
+			local Event = game:GetService("ReplicatedStorage").Network.Client:FindFirstChild("ClaimForeverPackReward")
+			if not Event then
+				warn("Remote not found")
+				return
+			end
+
+			for i = 1, 200 do
+				pcall(function()
+					if Event:IsA("RemoteFunction") then
+						Event:InvokeServer(i)
+					elseif Event:IsA("RemoteEvent") then
+						Event:FireServer(i)
+					end
+				end)
+
+				task.wait(0.05)
+			end
+		end)
+	end,
+})
