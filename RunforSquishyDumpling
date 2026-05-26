@@ -1,0 +1,296 @@
+-- ===================== Copy key site to clipboard =====================
+pcall(function()
+	if setclipboard then
+		setclipboard('https://scriptsrbx.com/key/')
+	end
+end)
+
+-- ===================== Load Rayfield UI =====================
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- ===================== Key fetcher =====================
+local HttpService = game:GetService('HttpService')
+
+local function fetchKeys(url)
+	local ok, body = pcall(function()
+		return game:HttpGet(url)
+	end)
+
+	if not ok or not body then
+		return {}
+	end
+
+	local okJson, arr = pcall(function()
+		return HttpService:JSONDecode(body)
+	end)
+
+	if okJson and type(arr) == 'table' then
+		local out = {}
+
+		for _, k in ipairs(arr) do
+			if type(k) == 'string' and #k > 0 then
+				table.insert(out, k)
+			end
+		end
+
+		return out
+	end
+
+	local out = {}
+
+	body = body:gsub('\r', '\n')
+
+	for key in body:gmatch('[^\n,]+') do
+		key = key:match('^%s*(.-)%s*$')
+
+		if key ~= '' then
+			table.insert(out, key)
+		end
+	end
+
+	return out
+end
+
+local KEYS_URL =
+	'https://raw.githubusercontent.com/ScriptsRBXdotCom/scripts/refs/heads/main/Keys'
+
+local KEY_LIST = fetchKeys(KEYS_URL)
+
+if #KEY_LIST == 0 then
+	KEY_LIST = { 'ScriptsRBX-DFAD3' }
+end
+
+-- ===================== Window =====================
+local Window = Rayfield:CreateWindow({
+	Name = 'Run for Squishy Dumpling! | ScriptsRBX',
+	LoadingTitle = 'ScriptsRBX.com',
+	LoadingSubtitle = 'Run for Squishy Dumpling!',
+	ShowText = 'ScriptsRBX',
+	ToggleUIKeybind = 'K',
+	Theme = 'DarkBlue',
+
+	KeySystem = false,
+
+	KeySettings = {
+		Title = 'ScriptsRBX',
+		Subtitle = 'Key System',
+		Note = 'Get key from scriptsrbx.com/key',
+		FileName = 'SRBX_RunForSquishyDumpling',
+		SaveKey = true,
+		GrabKeyFromSite = false,
+		Key = KEY_LIST,
+	},
+})
+
+-- ===================== Tabs =====================
+local FarmTab = Window:CreateTab("Auto Farm", "zap")
+
+
+-- ===================== Sections =====================
+FarmTab:CreateSection("Auto Farm")
+
+
+-- ===================== STREAMING FIXES =====================
+
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+local SAVED_PLOT_POSITION = nil
+
+local function getHRP()
+	local char = player.Character or player.CharacterAdded:Wait()
+	return char:WaitForChild("HumanoidRootPart")
+end
+
+-- create permanent streaming loader parts
+local function createStreamPart(pos, name)
+
+	if workspace:FindFirstChild(name) then
+		return
+	end
+
+	local p = Instance.new("Part")
+	p.Anchored = true
+	p.CanCollide = false
+	p.Transparency = 1
+	p.Size = Vector3.new(10,10,10)
+	p.Name = name
+	p.CFrame = CFrame.new(pos)
+	p.Parent = workspace
+
+	return p
+end
+
+-- ===================== SAVE PLOT POSITION =====================
+
+task.spawn(function()
+
+	while not SAVED_PLOT_POSITION do
+
+		for _, obj in pairs(workspace:GetDescendants()) do
+
+			if obj:IsA("Model") and obj.Name == ("Plot_" .. player.Name) then
+
+				local part =
+					obj.PrimaryPart
+					or obj:FindFirstChildWhichIsA("BasePart", true)
+
+				if part then
+
+					SAVED_PLOT_POSITION = part.Position
+
+					createStreamPart(
+						SAVED_PLOT_POSITION,
+						"SRBX_PlotLoader"
+					)
+
+					print("Saved Plot Position:", SAVED_PLOT_POSITION)
+
+					break
+				end
+			end
+		end
+
+		task.wait(1)
+
+	end
+
+end)
+
+-- ===================== TELEPORT TO PLOT =====================
+
+FarmTab:CreateButton({
+	Name = "Teleport To My Plot",
+	Callback = function()
+
+		local hrp = getHRP()
+
+		if SAVED_PLOT_POSITION then
+
+			hrp.CFrame = CFrame.new(
+				SAVED_PLOT_POSITION + Vector3.new(0,5,0)
+			)
+
+			Rayfield:Notify({
+				Title = "Teleported",
+				Content = "Teleported to saved plot",
+				Duration = 2
+			})
+
+		else
+
+			Rayfield:Notify({
+				Title = "Loading Plot",
+				Content = "Your plot has not streamed in yet",
+				Duration = 3
+			})
+
+		end
+	end,
+})
+
+
+-- ===================== BETTER MOVEMENT =====================
+
+local UserInputService = game:GetService("UserInputService")
+
+local InfiniteJump = false
+local WalkSpeed = 16
+local JumpPower = 50
+
+local function applyMovement()
+	local char = player.Character
+	if not char then return end
+
+	local hum = char:FindFirstChildOfClass("Humanoid")
+
+	if hum then
+		hum.WalkSpeed = WalkSpeed
+		hum.JumpPower = JumpPower
+		hum.UseJumpPower = true
+	end
+end
+
+player.CharacterAdded:Connect(function(char)
+
+	local hum = char:WaitForChild("Humanoid")
+
+	task.wait(0.3)
+
+	hum.WalkSpeed = WalkSpeed
+	hum.JumpPower = JumpPower
+	hum.UseJumpPower = true
+
+	-- constantly apply
+	task.spawn(function()
+
+		while char.Parent do
+
+			pcall(function()
+				hum.WalkSpeed = WalkSpeed
+				hum.JumpPower = JumpPower
+			end)
+
+			task.wait(0.2)
+		end
+	end)
+end)
+
+applyMovement()
+
+-- infinite jump
+UserInputService.JumpRequest:Connect(function()
+
+	if not InfiniteJump then
+		return
+	end
+
+	local char = player.Character
+	if not char then return end
+
+	local hum = char:FindFirstChildOfClass("Humanoid")
+
+	if hum then
+		hum:ChangeState(Enum.HumanoidStateType.Jumping)
+	end
+end)
+
+-- ===================== UI =====================
+
+FarmTab:CreateSection("Movement")
+
+FarmTab:CreateSlider({
+	Name = "WalkSpeed",
+	Range = {16, 1000},
+	Increment = 1,
+	CurrentValue = 16,
+	Callback = function(v)
+
+		WalkSpeed = v
+		applyMovement()
+
+	end,
+})
+
+FarmTab:CreateSlider({
+	Name = "JumpPower",
+	Range = {50, 300},
+	Increment = 1,
+	CurrentValue = 50,
+	Callback = function(v)
+
+		JumpPower = v
+		applyMovement()
+
+	end,
+})
+
+FarmTab:CreateToggle({
+	Name = "Infinite Jump",
+	CurrentValue = false,
+	Callback = function(v)
+
+		InfiniteJump = v
+
+	end,
+})
