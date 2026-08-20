@@ -1,0 +1,585 @@
+--// Services
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Player = Players.LocalPlayer
+
+--// Rayfield Gen2
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
+
+local Window = Rayfield:CreateWindow({
+	name = "Progression Farm",
+	subtitle = "Auto Progression",
+})
+
+local FarmTab = Window:CreateTab({
+	name = "Auto Farm",
+})
+
+--// Remote
+local RebirthRequest = ReplicatedStorage:WaitForChild("RebirthRequest")
+
+--// State
+local State = {
+	AutoWin = false,
+	AutoTreadmill = false,
+	Combo = false,
+	AutoRebirth = false,
+}
+
+--// Timing
+local TREADMILL_DELAY = 0.20
+local WIN_DELAY = 0.35
+
+-- Combo is intentionally slower
+local COMBO_TREADMILL_TIME = 2.0
+local COMBO_WIN_WAIT = 1.0
+
+local REBIRTH_DELAY = 2
+
+--------------------------------------------------
+-- Character
+--------------------------------------------------
+
+local function getCharacter()
+	return Player.Character
+end
+
+local function getRoot()
+	local character = getCharacter()
+
+	if not character then
+		return nil
+	end
+
+	return character:FindFirstChild("HumanoidRootPart")
+end
+
+--------------------------------------------------
+-- Stats
+--------------------------------------------------
+
+local function getStat(statName)
+	local wanted = statName:lower()
+
+	local leaderstats = Player:FindFirstChild("leaderstats")
+
+	if leaderstats then
+		for _, object in ipairs(leaderstats:GetChildren()) do
+			if object.Name:lower() == wanted then
+				local success, value = pcall(function()
+					return object.Value
+				end)
+
+				if success then
+					return tonumber(value) or 0
+				end
+			end
+		end
+	end
+
+	-- Player attributes
+	for name, value in pairs(Player:GetAttributes()) do
+		if name:lower() == wanted then
+			return tonumber(value) or 0
+		end
+	end
+
+	-- Other values under player
+	for _, object in ipairs(Player:GetDescendants()) do
+		if object.Name:lower() == wanted then
+			if object:IsA("IntValue")
+				or object:IsA("NumberValue") then
+
+				return tonumber(object.Value) or 0
+			end
+		end
+	end
+
+	return 0
+end
+
+--------------------------------------------------
+-- Requirement attribute
+--------------------------------------------------
+
+local function getRequiredRebirth(treadmill)
+	if not treadmill then
+		return nil
+	end
+
+	local function check(object)
+		for name, value in pairs(object:GetAttributes()) do
+			local lower = name:lower()
+
+			if lower == "requiredrebirth"
+				or lower == "requiredrebirths"
+				or lower == "rebirthrequired"
+				or lower == "rebirthrequirement" then
+
+				return tonumber(value)
+			end
+		end
+
+		return nil
+	end
+
+	local requirement = check(treadmill)
+
+	if requirement ~= nil then
+		return requirement
+	end
+
+	for _, object in ipairs(treadmill:GetDescendants()) do
+		requirement = check(object)
+
+		if requirement ~= nil then
+			return requirement
+		end
+	end
+
+	return nil
+end
+
+--------------------------------------------------
+-- Best treadmill
+--------------------------------------------------
+
+local function findBestTreadmill()
+	local rebirths = getStat("Rebirths")
+
+	local best
+	local bestRequirement = -math.huge
+
+	for _, object in ipairs(workspace:GetChildren()) do
+		if object.Name:lower():find("treadmill") then
+			local requirement = getRequiredRebirth(object)
+
+			if requirement
+				and requirement <= rebirths
+				and requirement > bestRequirement then
+
+				best = object
+				bestRequirement = requirement
+			end
+		end
+	end
+
+	return best, bestRequirement
+end
+
+--------------------------------------------------
+-- Find conveyor inside treadmill
+--------------------------------------------------
+
+local function findConveyor(treadmill)
+	if not treadmill then
+		return nil
+	end
+
+	-- First prefer obvious names.
+	local names = {
+		"conveyor",
+		"convey",
+		"belt",
+		"tread",
+		"track",
+		"walk",
+	}
+
+	for _, object in ipairs(treadmill:GetDescendants()) do
+		if object:IsA("BasePart") then
+			local lower = object.Name:lower()
+
+			for _, keyword in ipairs(names) do
+				if lower:find(keyword) then
+					return object
+				end
+			end
+		end
+	end
+
+	-- Fallback: largest flat part.
+	local best
+	local bestScore = -1
+
+	for _, object in ipairs(treadmill:GetDescendants()) do
+		if object:IsA("BasePart") then
+			local size = object.Size
+
+			local score =
+				(size.X * size.Z)
+				/ math.max(size.Y, 0.1)
+
+			if score > bestScore then
+				bestScore = score
+				best = object
+			end
+		end
+	end
+
+	return best
+end
+
+--------------------------------------------------
+-- Streaming helper
+--------------------------------------------------
+
+local function requestStreaming(model)
+	if not model or not model:IsA("Model") then
+		return
+	end
+
+	local success, pivot = pcall(function()
+		return model:GetPivot()
+	end)
+
+	if not success then
+		return
+	end
+
+	pcall(function()
+		Player:RequestStreamAroundAsync(
+			pivot.Position,
+			3
+		)
+	end)
+end
+
+--------------------------------------------------
+-- Stand directly on conveyor
+--------------------------------------------------
+
+local function goToTreadmill()
+	local root = getRoot()
+
+	if not root then
+		return false
+	end
+
+	local treadmill, required =
+		findBestTreadmill()
+
+	if not treadmill then
+		return false
+	end
+
+	local conveyor =
+		findConveyor(treadmill)
+
+	-- Model may be streamed but descendants not loaded.
+	if not conveyor then
+		requestStreaming(treadmill)
+
+		task.wait(0.15)
+
+		conveyor =
+			findConveyor(treadmill)
+	end
+
+	if not conveyor then
+		return false
+	end
+
+	-- Put character close enough to actually contact
+	-- the conveyor instead of floating above it.
+	local y =
+		(conveyor.Size.Y / 2)
+		+ (root.Size.Y / 2)
+		- 0.35
+
+	root.CFrame =
+		conveyor.CFrame
+		* CFrame.new(0, y, 0)
+
+	return true, treadmill, required, conveyor
+end
+
+--------------------------------------------------
+-- Win-zone parsing
+--------------------------------------------------
+
+local function getWinRequirement(model)
+	return tonumber(
+		model.Name:match("^WinZoneLevel(%d+)Model")
+	)
+end
+
+--------------------------------------------------
+-- Best win zone
+--------------------------------------------------
+
+local function findBestWinModel()
+	local level = getStat("Level")
+
+	local best
+	local bestRequirement = -1
+
+	for _, object in ipairs(workspace:GetChildren()) do
+		if object:IsA("Model") then
+			local requirement =
+				getWinRequirement(object)
+
+			if requirement
+				and requirement <= level
+				and requirement > bestRequirement then
+
+				best = object
+				bestRequirement = requirement
+			end
+		end
+	end
+
+	return best, bestRequirement
+end
+
+--------------------------------------------------
+-- Find TouchWin
+--------------------------------------------------
+
+local function findTouchWin(model)
+	if not model then
+		return nil
+	end
+
+	local touch =
+		model:FindFirstChild("TouchWin", true)
+
+	if touch and touch:IsA("BasePart") then
+		return touch
+	end
+
+	-- StreamingEnabled:
+	-- request this model's region before searching again.
+	requestStreaming(model)
+
+	local timeout = os.clock() + 3
+
+	repeat
+		touch =
+			model:FindFirstChild("TouchWin", true)
+
+		if touch and touch:IsA("BasePart") then
+			return touch
+		end
+
+		task.wait(0.1)
+	until os.clock() > timeout
+
+	return nil
+end
+
+--------------------------------------------------
+-- Go to best TouchWin
+--------------------------------------------------
+
+local function goToBestWin()
+	local root = getRoot()
+
+	if not root then
+		return false
+	end
+
+	local winModel, requirement =
+		findBestWinModel()
+
+	if not winModel then
+		return false
+	end
+
+	local touch =
+		findTouchWin(winModel)
+
+	if not touch then
+		return false
+	end
+
+	-- Move PLAYER to TouchWin.
+	-- Don't move TouchWin itself.
+	root.CFrame = touch.CFrame
+
+	return true, winModel, requirement
+end
+
+--------------------------------------------------
+-- AUTO TREADMILL
+--------------------------------------------------
+
+task.spawn(function()
+	while true do
+		if State.AutoTreadmill and not State.Combo then
+			goToTreadmill()
+		end
+
+		task.wait(TREADMILL_DELAY)
+	end
+end)
+
+--------------------------------------------------
+-- AUTO WIN
+--------------------------------------------------
+
+task.spawn(function()
+	while true do
+		if State.AutoWin and not State.Combo then
+			goToBestWin()
+		end
+
+		task.wait(WIN_DELAY)
+	end
+end)
+
+--------------------------------------------------
+-- COMBO
+--
+-- Treadmill -> wait -> win -> wait -> treadmill
+--
+-- Slower so TouchWin teleport/reset has time to happen.
+--------------------------------------------------
+
+task.spawn(function()
+	while true do
+		if State.Combo then
+
+			--------------------------------------------------
+			-- Stay on best treadmill
+			--------------------------------------------------
+
+			local started =
+				os.clock()
+
+			while State.Combo
+				and os.clock() - started
+					< COMBO_TREADMILL_TIME do
+
+				goToTreadmill()
+
+				task.wait(0.20)
+			end
+
+			if not State.Combo then
+				continue
+			end
+
+			--------------------------------------------------
+			-- Touch highest available win
+			--------------------------------------------------
+
+			goToBestWin()
+
+			-- Allow game's TouchWin logic / spawn TP.
+			task.wait(COMBO_WIN_WAIT)
+
+			--------------------------------------------------
+			-- Recalculate immediately.
+			--
+			-- Rebirth/level may have changed.
+			--------------------------------------------------
+
+			goToTreadmill()
+
+		else
+			task.wait(0.25)
+		end
+	end
+end)
+
+--------------------------------------------------
+-- AUTO REBIRTH
+--------------------------------------------------
+
+task.spawn(function()
+	while true do
+		if State.AutoRebirth then
+			pcall(function()
+				RebirthRequest:FireServer()
+			end)
+		end
+
+		task.wait(REBIRTH_DELAY)
+	end
+end)
+
+--------------------------------------------------
+-- Respawn handling
+--------------------------------------------------
+
+Player.CharacterAdded:Connect(function(character)
+	character:WaitForChild("HumanoidRootPart")
+
+	task.wait(0.25)
+
+	if State.AutoTreadmill or State.Combo then
+		goToTreadmill()
+	end
+end)
+
+--------------------------------------------------
+-- UI
+--------------------------------------------------
+
+FarmTab:CreateToggle({
+	name = "Auto Win",
+	description = "Continuously touches the highest win zone your level can use.",
+	flag = "AutoWin",
+	value = false,
+
+	callback = function(value)
+		State.AutoWin = value
+
+		print(
+			"[Auto Win]",
+			value and "ON" or "OFF"
+		)
+	end,
+})
+
+FarmTab:CreateToggle({
+	name = "Auto Treadmill",
+	description = "Keeps you on the best treadmill for your current rebirths.",
+	flag = "AutoTreadmill",
+	value = false,
+
+	callback = function(value)
+		State.AutoTreadmill = value
+
+		print(
+			"[Auto Treadmill]",
+			value and "ON" or "OFF"
+		)
+	end,
+})
+
+FarmTab:CreateToggle({
+	name = "Auto Win + Treadmill (Slower)",
+	description = "Alternates between farming the treadmill and collecting the best win.",
+	flag = "AutoCombo",
+	value = false,
+
+	callback = function(value)
+		State.Combo = value
+
+		print(
+			"[Auto Combo]",
+			value and "ON" or "OFF"
+		)
+	end,
+})
+
+FarmTab:CreateToggle({
+	name = "Auto Rebirth",
+	description = "Attempts RebirthRequest every 2 seconds.",
+	flag = "AutoRebirth",
+	value = false,
+
+	callback = function(value)
+		State.AutoRebirth = value
+
+		print(
+			"[Auto Rebirth]",
+			value and "ON" or "OFF"
+		)
+	end,
+})
+
+print("[Progression Farm] Rayfield Gen2 loaded")
