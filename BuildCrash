@@ -1,0 +1,2447 @@
+--========================================================
+-- BUILD & CRASH DEV
+-- FULL QUEST AUTOFARM
+-- VEHICLE COLLISION
+-- FRAGMENT CLEANUP
+-- VEHICLE STORAGE RESET
+-- AUTO CLAIM
+-- DROP COLLECT
+-- RAYFIELD GEN2 UI
+--========================================================
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Player = Players.LocalPlayer
+
+--========================================================
+-- RAYFIELD
+--========================================================
+
+local Rayfield = loadstring(
+    game:HttpGet("https://sirius.menu/gen2")
+)()
+
+local Window = Rayfield:CreateWindow({
+    name = "Build & Crash Dev",
+    subtitle = "Quest Autofarm",
+    theme = "cobalt",
+
+    configuration = {
+        autoSave = true,
+        autoLoad = true,
+        fileName = "BuildCrashDev"
+    }
+})
+
+local FarmTab = Window:CreateTab({
+    name = "Autofarm"
+})
+
+local StorageTab = Window:CreateTab({
+    name = "Storage"
+})
+
+local DropsTab = Window:CreateTab({
+    name = "Drops"
+})
+
+local DebugTab = Window:CreateTab({
+    name = "Debug"
+})
+
+--========================================================
+-- GAME REFERENCES
+--========================================================
+
+local ClientNet = ReplicatedStorage
+    :WaitForChild("client")
+    :WaitForChild("net")
+
+local ZAP = ReplicatedStorage
+    :WaitForChild("ZAP")
+
+local PlotRemote = ZAP
+    :WaitForChild("plot_RELIABLE")
+
+local Objectives = workspace
+    :WaitForChild("map")
+    :WaitForChild("objectives")
+
+local QuestLabel = Player
+    :WaitForChild("PlayerGui")
+    :WaitForChild("hud")
+    :WaitForChild("bottomHud")
+    :WaitForChild("questProgress")
+    :WaitForChild("content")
+    :WaitForChild("info")
+    :WaitForChild("nameLabel")
+
+--========================================================
+-- NETWORK MODULES
+--========================================================
+
+local QuestNet
+local DropNet
+
+pcall(function()
+    QuestNet = require(
+        ClientNet:WaitForChild("questNet")
+    )
+end)
+
+pcall(function()
+    DropNet = require(
+        ClientNet:WaitForChild("dropNet")
+    )
+end)
+
+--========================================================
+-- SETTINGS
+--========================================================
+
+local Settings = {
+    Enabled = false,
+
+    VehicleCollision = true,
+    CharacterFallback = true,
+    NearestFallback = true,
+
+    CleanupFragments = true,
+
+    AutoClaim = true,
+    AutoCollectDrops = false,
+
+    -- Vehicle storage
+    AutoUnload = true,
+
+    -- 1.00 = 100%
+    UnloadAtPercent = 1.00,
+
+    PlotReturnDelay = 1.5,
+    StartRunDelay = 1.0,
+    ReturnDelay = 0.5,
+
+    RunEndTimeout = 5,
+    VehicleSpawnTimeout = 10,
+
+    -- Autofarm
+    FarmDelay = 0.25,
+
+    ApproachDistance = 7,
+    CollisionDepth = 4,
+    VerticalOffset = 1,
+
+    CleanupPasses = 10,
+
+    -- UPDATED
+    CleanupRadius = 500,
+
+    CleanupDelay = 0.10,
+
+    CharacterDistance = 5,
+
+    ClaimDelay = 3
+}
+
+--========================================================
+-- RUNTIME STATE
+--========================================================
+
+local Runtime = {
+    StorageResetting = false,
+
+    LastQuest = nil,
+
+    LastTarget = nil,
+
+    LastTargetPosition = nil,
+
+    ReturnCFrame = nil,
+
+    LastStorageCurrent = 0,
+    LastStorageMax = 0
+}
+
+--========================================================
+-- QUEST ALIASES
+--========================================================
+
+local QuestAliases = {
+    ["basic tree"] = "tree",
+    ["tree"] = "tree",
+
+    ["hay bales"] = "haybales",
+    ["hay bale"] = "haybales",
+    ["hay"] = "haybales",
+
+    ["basic rock"] = "rock",
+    ["rock"] = "rock",
+
+    ["barrel"] = "barrel",
+    ["barrels"] = "barrel",
+
+    ["giant tree"] = "gianttree",
+
+    ["pumpkin"] = "pumpkin",
+    ["pumpkins"] = "pumpkin",
+
+    ["small cloud"] = "smallcloud",
+    ["big cloud"] = "bigcloud",
+
+    ["castle"] = "castle",
+    ["castle banner"] = "castlebanner",
+
+    ["knight"] = "knight",
+
+    ["bell"] = "bell",
+
+    ["cactus"] = "cactus",
+    ["basic cactus"] = "cactus",
+
+    ["convenience store"] = "conveniencestore"
+}
+
+--========================================================
+-- STRING HELPERS
+--========================================================
+
+local function Trim(Text)
+    return tostring(Text)
+        :gsub("^%s+", "")
+        :gsub("%s+$", "")
+end
+
+local function Normalize(Text)
+    return Trim(Text)
+        :lower()
+        :gsub("%s+", "")
+        :gsub("_", "")
+        :gsub("%-", "")
+        :gsub("[^%w]", "")
+end
+
+local function GetQuest()
+    return QuestLabel.Text
+end
+
+local function QuestToObjective(Text)
+    local Lower =
+        Trim(Text):lower()
+
+    if QuestAliases[Lower] then
+        return QuestAliases[Lower]
+    end
+
+    return Normalize(Lower)
+end
+
+--========================================================
+-- CHARACTER
+--========================================================
+
+local function GetCharacter()
+    return Player.Character
+        or Player.CharacterAdded:Wait()
+end
+
+local function GetRoot()
+    local Character =
+        GetCharacter()
+
+    return Character:FindFirstChild(
+        "HumanoidRootPart"
+    )
+end
+
+--========================================================
+-- INSTANCE HELPERS
+--========================================================
+
+local function GetPosition(Object)
+    if not Object then
+        return nil
+    end
+
+    if Object:IsA("BasePart") then
+        return Object.Position
+    end
+
+    if Object:IsA("Model") then
+        return Object:GetPivot().Position
+    end
+
+    local Part =
+        Object:FindFirstChildWhichIsA(
+            "BasePart",
+            true
+        )
+
+    return Part and Part.Position
+end
+
+local function IsCrushable(Object)
+    return Object:GetAttribute(
+        "crushable_v2"
+    ) == true
+end
+
+--========================================================
+-- VEHICLE STORAGE DASHBOARD
+--========================================================
+
+local function GetVehicleStorageLabel()
+    local PlayerGui =
+        Player:FindFirstChild(
+            "PlayerGui"
+        )
+
+    if not PlayerGui then
+        return nil
+    end
+
+    local Hud =
+        PlayerGui:FindFirstChild(
+            "hud"
+        )
+
+    if not Hud then
+        return nil
+    end
+
+    local Bottom =
+        Hud:FindFirstChild(
+            "bottomHud"
+        )
+
+    if not Bottom then
+        return nil
+    end
+
+    local Dashboard =
+        Bottom:FindFirstChild(
+            "vehicleDashboard"
+        )
+
+    if not Dashboard then
+        return nil
+    end
+
+    local Frame =
+        Dashboard:FindFirstChild(
+            "frame"
+        )
+
+    if not Frame then
+        return nil
+    end
+
+    return Frame:FindFirstChild(
+        "amountText"
+    )
+end
+
+local function ParseStorageText(Text)
+    if not Text then
+        return 0, 0
+    end
+
+    local Current,
+        Maximum =
+        tostring(Text):match(
+            "([%d,%.]+)%s*/%s*([%d,%.]+)"
+        )
+
+    if not Current
+        or not Maximum
+    then
+        return 0, 0
+    end
+
+    Current =
+        Current:gsub(
+            ",",
+            ""
+        )
+
+    Maximum =
+        Maximum:gsub(
+            ",",
+            ""
+        )
+
+    return tonumber(Current) or 0,
+        tonumber(Maximum) or 0
+end
+
+local function GetVehicleStorage()
+    local Label =
+        GetVehicleStorageLabel()
+
+    if not Label then
+        return 0,
+            0,
+            0
+    end
+
+    local Current,
+        Maximum =
+        ParseStorageText(
+            Label.Text
+        )
+
+    local Percent = 0
+
+    if Maximum > 0 then
+        Percent =
+            Current / Maximum
+    end
+
+    Runtime.LastStorageCurrent =
+        Current
+
+    Runtime.LastStorageMax =
+        Maximum
+
+    return Current,
+        Maximum,
+        Percent
+end
+
+local function VehicleStorageFull()
+    local Current,
+        Maximum,
+        Percent =
+        GetVehicleStorage()
+
+    if Maximum <= 0 then
+        return false
+    end
+
+    return Percent >=
+        Settings.UnloadAtPercent
+end
+
+--========================================================
+-- RAW PLOT REMOTES
+--========================================================
+
+local function FirePlotEvent(Id)
+    local B =
+        buffer.create(1)
+
+    buffer.writeu8(
+        B,
+        0,
+        Id
+    )
+
+    PlotRemote:FireServer(
+        B,
+        {}
+    )
+end
+
+local function EndRun()
+    -- {1}
+    FirePlotEvent(1)
+
+    print(
+        "[Run] End run / despawn vehicle"
+    )
+end
+
+local function StartRun()
+    -- {0}
+    FirePlotEvent(0)
+
+    print(
+        "[Run] Start run / spawn vehicle"
+    )
+end
+
+--========================================================
+-- VEHICLE SEARCH
+--========================================================
+
+local function FindVehicle()
+    local Vehicles =
+        workspace:FindFirstChild(
+            "vehicles"
+        )
+
+    if not Vehicles then
+        return nil
+    end
+
+    -- Try ownership attributes first
+    for _, Vehicle in ipairs(
+        Vehicles:GetChildren()
+    ) do
+        if Vehicle:IsA("Model") then
+            local Owner =
+                Vehicle:GetAttribute(
+                    "ownerId"
+                )
+                or Vehicle:GetAttribute(
+                    "ownerid"
+                )
+                or Vehicle:GetAttribute(
+                    "owner"
+                )
+                or Vehicle:GetAttribute(
+                    "playerId"
+                )
+
+            if Owner == Player.UserId
+                or Owner == Player.Name
+                or tostring(Owner)
+                    == tostring(
+                        Player.UserId
+                    )
+            then
+                return Vehicle
+            end
+        end
+    end
+
+    -- Closest fallback
+    local Root =
+        GetRoot()
+
+    if not Root then
+        return nil
+    end
+
+    local Best
+    local BestDistance =
+        math.huge
+
+    for _, Vehicle in ipairs(
+        Vehicles:GetChildren()
+    ) do
+        if Vehicle:IsA("Model") then
+            local Distance =
+                (
+                    Vehicle
+                        :GetPivot()
+                        .Position
+                    - Root.Position
+                ).Magnitude
+
+            if Distance <
+                BestDistance
+            then
+                BestDistance =
+                    Distance
+
+                Best =
+                    Vehicle
+            end
+        end
+    end
+
+    return Best
+end
+
+local function WaitForVehicle(
+    Timeout
+)
+    local Start =
+        os.clock()
+
+    while os.clock() - Start
+        < (Timeout or 10)
+    do
+        local Vehicle =
+            FindVehicle()
+
+        if Vehicle
+            and Vehicle.Parent
+        then
+            return Vehicle
+        end
+
+        task.wait(0.15)
+    end
+
+    return nil
+end
+
+--========================================================
+-- DASHBOARD WAIT
+--========================================================
+
+local function WaitForDashboard(
+    ShouldExist,
+    Timeout
+)
+    local Start =
+        os.clock()
+
+    while os.clock() - Start
+        < (Timeout or 5)
+    do
+        local Label =
+            GetVehicleStorageLabel()
+
+        if ShouldExist then
+            if Label then
+                return true
+            end
+        else
+            if not Label then
+                return true
+            end
+        end
+
+        task.wait(0.1)
+    end
+
+    return false
+end
+
+--========================================================
+-- ORIGIN
+--========================================================
+
+local function GetOrigin()
+    local Vehicle =
+        FindVehicle()
+
+    if Vehicle then
+        return Vehicle
+            :GetPivot()
+            .Position
+    end
+
+    local Root =
+        GetRoot()
+
+    if Root then
+        return Root.Position
+    end
+
+    return Vector3.zero
+end
+
+--========================================================
+-- REMAINING OBJECTIVE PARTS
+--========================================================
+
+local function GetRemainingParts(
+    Object
+)
+    local Parts = {}
+
+    if not Object
+        or not Object.Parent
+    then
+        return Parts
+    end
+
+    if Object:IsA(
+        "BasePart"
+    ) then
+        table.insert(
+            Parts,
+            Object
+        )
+    end
+
+    for _, Descendant in ipairs(
+        Object:GetDescendants()
+    ) do
+        if Descendant:IsA(
+            "BasePart"
+        )
+            and Descendant.Parent
+            and Descendant.Transparency < 1
+        then
+            table.insert(
+                Parts,
+                Descendant
+            )
+        end
+    end
+
+    return Parts
+end
+
+local function GetNearestRemainingPart(
+    Object,
+    Origin
+)
+    local Best
+    local BestDistance =
+        math.huge
+
+    for _, Part in ipairs(
+        GetRemainingParts(
+            Object
+        )
+    ) do
+        local Distance =
+            (
+                Part.Position
+                - Origin
+            ).Magnitude
+
+        if Distance <
+            BestDistance
+        then
+            BestDistance =
+                Distance
+
+            Best =
+                Part
+        end
+    end
+
+    return Best,
+        BestDistance
+end
+
+--========================================================
+-- NEAREST CRUSHABLE
+--========================================================
+
+local function FindNearestCrushable()
+    local Origin =
+        GetOrigin()
+
+    local Best
+    local BestDistance =
+        math.huge
+
+    for _, Object in ipairs(
+        Objectives:GetChildren()
+    ) do
+        if IsCrushable(
+            Object
+        ) then
+            local Part,
+                Distance =
+                GetNearestRemainingPart(
+                    Object,
+                    Origin
+                )
+
+            if Part
+                and Distance <
+                    BestDistance
+            then
+                BestDistance =
+                    Distance
+
+                Best =
+                    Object
+            end
+        end
+    end
+
+    return Best,
+        BestDistance
+end
+
+--========================================================
+-- QUEST TARGET
+--========================================================
+
+local function FindQuestTarget()
+    local Quest =
+        GetQuest()
+
+    local Wanted =
+        Normalize(
+            QuestToObjective(
+                Quest
+            )
+        )
+
+    local Origin =
+        GetOrigin()
+
+    local Best
+    local BestDistance =
+        math.huge
+
+    for _, Object in ipairs(
+        Objectives:GetChildren()
+    ) do
+        if IsCrushable(Object)
+            and Normalize(
+                Object.Name
+            ) == Wanted
+        then
+            local Part,
+                Distance =
+                GetNearestRemainingPart(
+                    Object,
+                    Origin
+                )
+
+            if Part
+                and Distance <
+                    BestDistance
+            then
+                BestDistance =
+                    Distance
+
+                Best =
+                    Object
+            end
+        end
+    end
+
+    if Best then
+        return Best,
+            false,
+            BestDistance
+    end
+
+    if Settings.NearestFallback then
+        local Fallback,
+            Distance =
+            FindNearestCrushable()
+
+        return Fallback,
+            true,
+            Distance
+    end
+
+    return nil,
+        false,
+        math.huge
+end
+
+--========================================================
+-- COLLISION HIT
+--========================================================
+
+local function HitPart(
+    Vehicle,
+    Part
+)
+    if not Vehicle
+        or not Vehicle.Parent
+        or not Part
+        or not Part.Parent
+    then
+        return false
+    end
+
+    local TargetPosition =
+        Part.Position
+
+    local VehiclePosition =
+        Vehicle:GetPivot().Position
+
+    local Direction =
+        Vector3.new(
+            TargetPosition.X
+                - VehiclePosition.X,
+
+            0,
+
+            TargetPosition.Z
+                - VehiclePosition.Z
+        )
+
+    if Direction.Magnitude
+        < 0.1
+    then
+        Direction =
+            Vector3.new(
+                0,
+                0,
+                -1
+            )
+    else
+        Direction =
+            Direction.Unit
+    end
+
+    --====================================================
+    -- APPROACH TARGET
+    --====================================================
+
+    local Approach =
+        TargetPosition
+        - Direction
+        * Settings.ApproachDistance
+
+    Approach +=
+        Vector3.new(
+            0,
+            Settings.VerticalOffset,
+            0
+        )
+
+    Vehicle:PivotTo(
+        CFrame.lookAt(
+            Approach,
+
+            Vector3.new(
+                TargetPosition.X,
+                Approach.Y,
+                TargetPosition.Z
+            )
+        )
+    )
+
+    task.wait(
+        Settings.CleanupDelay
+    )
+
+    if not Part.Parent then
+        return true
+    end
+
+    --====================================================
+    -- IMPACT THROUGH TARGET
+    --====================================================
+
+    local Impact =
+        TargetPosition
+        + Direction
+        * Settings.CollisionDepth
+
+    Impact +=
+        Vector3.new(
+            0,
+            Settings.VerticalOffset,
+            0
+        )
+
+    Vehicle:PivotTo(
+        CFrame.lookAt(
+            Impact,
+            Impact + Direction
+        )
+    )
+
+    return true
+end
+
+--========================================================
+-- DESTROY OBJECTIVE / CLEAN FRAGMENTS
+--========================================================
+
+local function DestroyObjective(
+    Vehicle,
+    Objective
+)
+    if not Vehicle
+        or not Objective
+    then
+        return false
+    end
+
+    local StartPosition =
+        GetPosition(
+            Objective
+        )
+
+    Runtime.LastTarget =
+        Objective
+
+    Runtime.LastTargetPosition =
+        StartPosition
+
+    for Pass = 1,
+        Settings.CleanupPasses
+    do
+        if not Settings.Enabled
+            or Runtime.StorageResetting
+        then
+            break
+        end
+
+        --================================================
+        -- IMMEDIATELY STOP IF STORAGE FILLS
+        --================================================
+
+        if Settings.AutoUnload
+            and VehicleStorageFull()
+        then
+            break
+        end
+
+        if not Objective.Parent then
+            return true
+        end
+
+        if not Vehicle.Parent then
+            break
+        end
+
+        local Part,
+            Distance =
+            GetNearestRemainingPart(
+                Objective,
+
+                Vehicle
+                    :GetPivot()
+                    .Position
+            )
+
+        if not Part then
+            return true
+        end
+
+        --================================================
+        -- FRAGMENT DISTANCE CHECK
+        --================================================
+
+        if StartPosition then
+            local FragmentDistance =
+                (
+                    Part.Position
+                    - StartPosition
+                ).Magnitude
+
+            if FragmentDistance >
+                Settings.CleanupRadius
+            then
+                print(
+                    "[Cleanup] Fragment outside radius:",
+                    math.floor(
+                        FragmentDistance
+                    )
+                )
+
+                break
+            end
+        end
+
+        print(
+            "[Cleanup]",
+            Pass,
+            "/",
+            Settings.CleanupPasses,
+
+            Part.Name,
+
+            "distance:",
+            math.floor(
+                Distance
+            )
+        )
+
+        HitPart(
+            Vehicle,
+            Part
+        )
+
+        task.wait(
+            Settings.CleanupDelay
+        )
+    end
+
+    return true
+end
+
+--========================================================
+-- CHARACTER FALLBACK
+--========================================================
+
+local function CharacterTeleport(
+    Objective
+)
+    local Root =
+        GetRoot()
+
+    if not Root then
+        return false
+    end
+
+    local Part =
+        GetNearestRemainingPart(
+            Objective,
+            Root.Position
+        )
+
+    if not Part then
+        return false
+    end
+
+    local TargetPosition =
+        Part.Position
+
+    local Delta =
+        TargetPosition
+        - Root.Position
+
+    local Direction =
+        Vector3.new(
+            Delta.X,
+            0,
+            Delta.Z
+        )
+
+    if Direction.Magnitude
+        < 0.1
+    then
+        Direction =
+            Vector3.new(
+                0,
+                0,
+                -1
+            )
+    else
+        Direction =
+            Direction.Unit
+    end
+
+    local Destination =
+        TargetPosition
+        - Direction
+        * Settings.CharacterDistance
+
+    Destination +=
+        Vector3.new(
+            0,
+            3,
+            0
+        )
+
+    Root.CFrame =
+        CFrame.lookAt(
+            Destination,
+            TargetPosition
+        )
+
+    return true
+end
+
+--========================================================
+-- AUTO STORAGE RESET
+--========================================================
+
+local function DoVehicleStorageReset()
+    if Runtime.StorageResetting then
+        return
+    end
+
+    if not Settings.AutoUnload then
+        return
+    end
+
+    Runtime.StorageResetting =
+        true
+
+    local Current,
+        Maximum,
+        Percent =
+        GetVehicleStorage()
+
+    print(
+        "[Storage] FULL",
+        Current,
+        "/",
+        Maximum,
+        math.floor(
+            Percent * 100
+        ) .. "%"
+    )
+
+    Window:Notify({
+        title = "Vehicle Storage Full",
+
+        content =
+            tostring(
+                math.floor(
+                    Current
+                )
+            )
+            .. "/"
+            .. tostring(
+                math.floor(
+                    Maximum
+                )
+            )
+            .. " - resetting run"
+    })
+
+    --====================================================
+    -- SAVE CURRENT FARM POSITION
+    --====================================================
+
+    local OldVehicle =
+        FindVehicle()
+
+    if OldVehicle then
+        Runtime.ReturnCFrame =
+            OldVehicle:GetPivot()
+    else
+        Runtime.ReturnCFrame =
+            nil
+    end
+
+    --====================================================
+    -- END RUN
+    -- {1}
+    --====================================================
+
+    EndRun()
+
+    WaitForDashboard(
+        false,
+        Settings.RunEndTimeout
+    )
+
+    task.wait(
+        Settings.PlotReturnDelay
+    )
+
+    --====================================================
+    -- START NEW RUN
+    -- {0}
+    --====================================================
+
+    StartRun()
+
+    task.wait(
+        Settings.StartRunDelay
+    )
+
+    WaitForDashboard(
+        true,
+        Settings.VehicleSpawnTimeout
+    )
+
+    --====================================================
+    -- FIND NEW VEHICLE
+    --====================================================
+
+    local Vehicle =
+        WaitForVehicle(
+            Settings.VehicleSpawnTimeout
+        )
+
+    if not Vehicle then
+        warn(
+            "[Storage] New vehicle not found"
+        )
+
+        Window:Notify({
+            title = "Storage",
+            content = "Vehicle spawn failed"
+        })
+
+        Runtime.StorageResetting =
+            false
+
+        return
+    end
+
+    task.wait(
+        Settings.ReturnDelay
+    )
+
+    --====================================================
+    -- RECHECK STORAGE
+    --====================================================
+
+    local NewCurrent,
+        NewMaximum =
+        GetVehicleStorage()
+
+    print(
+        "[Storage] New run:",
+        NewCurrent,
+        "/",
+        NewMaximum
+    )
+
+    --====================================================
+    -- GO DIRECTLY BACK TO CURRENT QUEST TARGET
+    --====================================================
+
+    local Target =
+        FindQuestTarget()
+
+    if Target then
+        local Part =
+            GetNearestRemainingPart(
+                Target,
+
+                Vehicle
+                    :GetPivot()
+                    .Position
+            )
+
+        if Part then
+            print(
+                "[Storage] Returning directly to:",
+                Target.Name
+            )
+
+            HitPart(
+                Vehicle,
+                Part
+            )
+
+        elseif Runtime.ReturnCFrame then
+            Vehicle:PivotTo(
+                Runtime.ReturnCFrame
+            )
+        end
+
+    elseif Runtime.ReturnCFrame then
+
+        Vehicle:PivotTo(
+            Runtime.ReturnCFrame
+        )
+    end
+
+    Runtime.StorageResetting =
+        false
+
+    Window:Notify({
+        title = "Storage",
+
+        content =
+            "Run reset - resumed farming"
+    })
+end
+
+--========================================================
+-- AUTO CLAIM
+--========================================================
+
+local Claiming = false
+
+local function TryClaims()
+    if not Settings.AutoClaim
+        or Claiming
+        or not QuestNet
+    then
+        return
+    end
+
+    Claiming =
+        true
+
+    task.spawn(function()
+        local Success,
+            Result =
+            pcall(function()
+
+                return QuestNet
+                    .claimGettingStartedReward
+                    .call()
+
+            end)
+
+        if Success
+            and Result
+        then
+            print(
+                "[Quest] Getting Started claimed"
+            )
+        end
+    end)
+
+    task.spawn(function()
+        local Success,
+            Result =
+            pcall(function()
+
+                return QuestNet
+                    .claimConveyorReward
+                    .call()
+
+            end)
+
+        if Success
+            and Result
+        then
+            print(
+                "[Quest] Conveyor claimed"
+            )
+        end
+    end)
+
+    task.delay(
+        Settings.ClaimDelay,
+
+        function()
+            Claiming =
+                false
+        end
+    )
+end
+
+--========================================================
+-- QUEST CHANGE WATCHER
+--========================================================
+
+Runtime.LastQuest =
+    GetQuest()
+
+QuestLabel
+    :GetPropertyChangedSignal(
+        "Text"
+    )
+    :Connect(function()
+
+        local Current =
+            GetQuest()
+
+        if Current ==
+            Runtime.LastQuest
+        then
+            return
+        end
+
+        print(
+            "[Quest]",
+            Runtime.LastQuest,
+            "->",
+            Current
+        )
+
+        Runtime.LastQuest =
+            Current
+
+        TryClaims()
+    end)
+
+--========================================================
+-- DROP COLLECTOR
+--========================================================
+
+local SeenDrops = {}
+
+if DropNet then
+    DropNet.spawnItemDrops
+        .setCallback(
+            function(Drop)
+
+                print(
+                    "[Drop]",
+                    Drop.dropId,
+                    Drop.taggedItemId,
+                    Drop.quantity
+                )
+
+                if not Settings
+                    .AutoCollectDrops
+                then
+                    return
+                end
+
+                if SeenDrops[
+                    Drop.dropId
+                ] then
+                    return
+                end
+
+                SeenDrops[
+                    Drop.dropId
+                ] = true
+
+                DropNet
+                    .collectItemDrop
+                    .fire(
+                        Drop.dropId
+                    )
+            end
+        )
+end
+
+--========================================================
+-- MAIN FARM LOOP
+--========================================================
+
+task.spawn(function()
+
+    while true do
+
+        task.wait(
+            Settings.FarmDelay
+        )
+
+        if not Settings.Enabled then
+            continue
+        end
+
+        --================================================
+        -- STORAGE HAS HIGHEST PRIORITY
+        --================================================
+
+        if Settings.AutoUnload
+            and VehicleStorageFull()
+        then
+
+            DoVehicleStorageReset()
+
+            continue
+        end
+
+        if Runtime.StorageResetting then
+            continue
+        end
+
+        --================================================
+        -- FIND CURRENT QUEST TARGET
+        --================================================
+
+        local Target,
+            Fallback,
+            Distance =
+            FindQuestTarget()
+
+        if not Target then
+
+            warn(
+                "[Farm] No target found"
+            )
+
+            TryClaims()
+
+            continue
+        end
+
+        Runtime.LastTarget =
+            Target
+
+        Runtime.LastTargetPosition =
+            GetPosition(
+                Target
+            )
+
+        print(
+            "[Farm]",
+
+            Fallback
+                and "NEAREST"
+                or "QUEST",
+
+            GetQuest(),
+
+            "=>",
+
+            Target.Name,
+
+            "HP:",
+            Target:GetAttribute(
+                "totalObjectiveHealth"
+            ),
+
+            "Distance:",
+            math.floor(
+                Distance
+            )
+        )
+
+        --================================================
+        -- VEHICLE COLLISION
+        --================================================
+
+        local Vehicle =
+            FindVehicle()
+
+        if Settings.VehicleCollision
+            and Vehicle
+        then
+
+            if Settings
+                .CleanupFragments
+            then
+
+                DestroyObjective(
+                    Vehicle,
+                    Target
+                )
+
+            else
+
+                local Part =
+                    GetNearestRemainingPart(
+                        Target,
+
+                        Vehicle
+                            :GetPivot()
+                            .Position
+                    )
+
+                if Part then
+                    HitPart(
+                        Vehicle,
+                        Part
+                    )
+                end
+            end
+
+        elseif Settings
+            .CharacterFallback
+        then
+
+            CharacterTeleport(
+                Target
+            )
+        end
+
+        TryClaims()
+    end
+end)
+
+--========================================================
+-- UI - AUTOFARM
+--========================================================
+
+FarmTab:CreateSection({
+    name = "Quest Autofarm"
+})
+
+FarmTab:CreateToggle({
+    name = "Auto Farm",
+
+    description =
+        "Automatically farms the current quest",
+
+    flag = "AutoFarm",
+
+    value = false,
+
+    callback = function(Value)
+
+        Settings.Enabled =
+            Value
+
+        if not Value then
+            Runtime.StorageResetting =
+                false
+        end
+
+        Window:Notify({
+            title = "Auto Farm",
+
+            content =
+                Value
+                and (
+                    "Enabled - "
+                    .. GetQuest()
+                )
+                or "Disabled"
+        })
+    end
+})
+
+FarmTab:CreateToggle({
+    name = "Vehicle Collision",
+
+    description =
+        "Teleports the vehicle through objectives",
+
+    flag = "VehicleCollision",
+
+    value = true,
+
+    callback = function(Value)
+
+        Settings.VehicleCollision =
+            Value
+
+    end
+})
+
+FarmTab:CreateToggle({
+    name = "Clean Leftover Parts",
+
+    description =
+        "Targets surviving broken fragments",
+
+    flag = "CleanupFragments",
+
+    value = true,
+
+    callback = function(Value)
+
+        Settings.CleanupFragments =
+            Value
+
+    end
+})
+
+FarmTab:CreateToggle({
+    name = "Nearest Fallback",
+
+    description =
+        "Uses nearest crushable if quest matching fails",
+
+    flag = "NearestFallback",
+
+    value = true,
+
+    callback = function(Value)
+
+        Settings.NearestFallback =
+            Value
+
+    end
+})
+
+FarmTab:CreateToggle({
+    name = "Character Fallback",
+
+    description =
+        "Uses character teleport if car isn't available",
+
+    flag = "CharacterFallback",
+
+    value = true,
+
+    callback = function(Value)
+
+        Settings.CharacterFallback =
+            Value
+
+    end
+})
+
+FarmTab:CreateToggle({
+    name = "Auto Claim",
+
+    description =
+        "Automatically attempts quest reward claims",
+
+    flag = "AutoClaim",
+
+    value = true,
+
+    callback = function(Value)
+
+        Settings.AutoClaim =
+            Value
+
+        if Value then
+            TryClaims()
+        end
+    end
+})
+
+--========================================================
+-- UI - COLLISION SETTINGS
+--========================================================
+
+FarmTab:CreateSection({
+    name = "Collision Settings"
+})
+
+FarmTab:CreateSlider({
+    name = "Approach Distance",
+
+    range = {
+        1,
+        30
+    },
+
+    increment = 1,
+
+    value = 7,
+
+    suffix = " studs",
+
+    callback = function(Value)
+
+        Settings.ApproachDistance =
+            Value
+
+    end
+})
+
+FarmTab:CreateSlider({
+    name = "Collision Depth",
+
+    range = {
+        0,
+        20
+    },
+
+    increment = 0.5,
+
+    value = 4,
+
+    suffix = " studs",
+
+    callback = function(Value)
+
+        Settings.CollisionDepth =
+            Value
+
+    end
+})
+
+FarmTab:CreateSlider({
+    name = "Vertical Offset",
+
+    range = {
+        -5,
+        10
+    },
+
+    increment = 0.5,
+
+    value = 1,
+
+    suffix = " studs",
+
+    callback = function(Value)
+
+        Settings.VerticalOffset =
+            Value
+
+    end
+})
+
+FarmTab:CreateSlider({
+    name = "Cleanup Passes",
+
+    range = {
+        1,
+        30
+    },
+
+    increment = 1,
+
+    value = 10,
+
+    callback = function(Value)
+
+        Settings.CleanupPasses =
+            Value
+
+    end
+})
+
+FarmTab:CreateSlider({
+    name = "Cleanup Radius",
+
+    range = {
+        50,
+        1500
+    },
+
+    increment = 25,
+
+    value = 500,
+
+    suffix = " studs",
+
+    callback = function(Value)
+
+        Settings.CleanupRadius =
+            Value
+
+    end
+})
+
+FarmTab:CreateSlider({
+    name = "Cleanup Delay",
+
+    range = {
+        0.05,
+        1
+    },
+
+    increment = 0.05,
+
+    value = 0.10,
+
+    suffix = " s",
+
+    callback = function(Value)
+
+        Settings.CleanupDelay =
+            Value
+
+    end
+})
+
+FarmTab:CreateSlider({
+    name = "Farm Delay",
+
+    range = {
+        0.1,
+        2
+    },
+
+    increment = 0.05,
+
+    value = 0.25,
+
+    suffix = " s",
+
+    callback = function(Value)
+
+        Settings.FarmDelay =
+            Value
+
+    end
+})
+
+--========================================================
+-- UI - STORAGE
+--========================================================
+
+StorageTab:CreateSection({
+    name = "Vehicle Storage"
+})
+
+StorageTab:CreateToggle({
+    name = "Auto Reset Full Storage",
+
+    description =
+        "Ends the run at full storage and starts a new one",
+
+    flag = "AutoUnload",
+
+    value = true,
+
+    callback = function(Value)
+
+        Settings.AutoUnload =
+            Value
+
+    end
+})
+
+StorageTab:CreateSlider({
+    name = "Reset At",
+
+    range = {
+        50,
+        100
+    },
+
+    increment = 1,
+
+    value = 100,
+
+    suffix = "%",
+
+    callback = function(Value)
+
+        Settings.UnloadAtPercent =
+            Value / 100
+
+    end
+})
+
+StorageTab:CreateSlider({
+    name = "End Run Delay",
+
+    range = {
+        0.25,
+        5
+    },
+
+    increment = 0.25,
+
+    value = 1.5,
+
+    suffix = " s",
+
+    callback = function(Value)
+
+        Settings.PlotReturnDelay =
+            Value
+
+    end
+})
+
+StorageTab:CreateSlider({
+    name = "Start Run Delay",
+
+    range = {
+        0.25,
+        5
+    },
+
+    increment = 0.25,
+
+    value = 1,
+
+    suffix = " s",
+
+    callback = function(Value)
+
+        Settings.StartRunDelay =
+            Value
+
+    end
+})
+
+StorageTab:CreateSlider({
+    name = "Return Delay",
+
+    range = {
+        0,
+        3
+    },
+
+    increment = 0.1,
+
+    value = 0.5,
+
+    suffix = " s",
+
+    callback = function(Value)
+
+        Settings.ReturnDelay =
+            Value
+
+    end
+})
+
+StorageTab:CreateButton({
+    name = "Print Vehicle Storage",
+
+    callback = function()
+
+        local Current,
+            Maximum,
+            Percent =
+            GetVehicleStorage()
+
+        print(
+            "[Vehicle Storage]",
+            Current,
+            "/",
+            Maximum,
+            math.floor(
+                Percent * 100
+            ) .. "%"
+        )
+
+        Window:Notify({
+            title = "Vehicle Storage",
+
+            content =
+                tostring(
+                    math.floor(Current)
+                )
+                .. "/"
+                .. tostring(
+                    math.floor(Maximum)
+                )
+                .. " ("
+                .. tostring(
+                    math.floor(
+                        Percent * 100
+                    )
+                )
+                .. "%)"
+        })
+    end
+})
+
+StorageTab:CreateButton({
+    name = "End Run",
+
+    callback = function()
+
+        EndRun()
+
+    end
+})
+
+StorageTab:CreateButton({
+    name = "Start Run",
+
+    callback = function()
+
+        StartRun()
+
+    end
+})
+
+StorageTab:CreateButton({
+    name = "Test Storage Reset",
+
+    callback = function()
+
+        task.spawn(
+            DoVehicleStorageReset
+        )
+
+    end
+})
+
+--========================================================
+-- UI - DROPS
+--========================================================
+
+DropsTab:CreateSection({
+    name = "Drops"
+})
+
+DropsTab:CreateToggle({
+    name = "Auto Collect Item Drops",
+
+    description =
+        "Collects spawned item drops",
+
+    flag = "AutoCollectDrops",
+
+    value = false,
+
+    callback = function(Value)
+
+        Settings.AutoCollectDrops =
+            Value
+
+    end
+})
+
+DropsTab:CreateButton({
+    name = "Clear Drop Cache",
+
+    callback = function()
+
+        table.clear(
+            SeenDrops
+        )
+
+        Window:Notify({
+            title = "Drops",
+            content = "Cache cleared"
+        })
+    end
+})
+
+--========================================================
+-- UI - DEBUG TARGET
+--========================================================
+
+DebugTab:CreateSection({
+    name = "Target Debug"
+})
+
+DebugTab:CreateButton({
+    name = "Print Current Quest",
+
+    callback = function()
+
+        print(
+            "[Quest]",
+            GetQuest(),
+            "=>",
+            QuestToObjective(
+                GetQuest()
+            )
+        )
+
+    end
+})
+
+DebugTab:CreateButton({
+    name = "Print Current Target",
+
+    callback = function()
+
+        local Target,
+            Fallback,
+            Distance =
+            FindQuestTarget()
+
+        if not Target then
+            warn(
+                "No target"
+            )
+
+            return
+        end
+
+        print(
+            "TARGET:",
+            Target:GetFullName()
+        )
+
+        print(
+            "FALLBACK:",
+            Fallback
+        )
+
+        print(
+            "DISTANCE:",
+            Distance
+        )
+
+        print(
+            "PARTS LEFT:",
+            #GetRemainingParts(
+                Target
+            )
+        )
+
+        print(
+            "HP:",
+            Target:GetAttribute(
+                "totalObjectiveHealth"
+            )
+        )
+
+        print(
+            "REWARD:",
+            Target:GetAttribute(
+                "objectiveDropQuantity"
+            )
+        )
+    end
+})
+
+DebugTab:CreateButton({
+    name = "Hit Nearest Fragment",
+
+    callback = function()
+
+        local Target =
+            FindQuestTarget()
+
+        local Vehicle =
+            FindVehicle()
+
+        if not Target
+            or not Vehicle
+        then
+            warn(
+                "Missing target or vehicle"
+            )
+
+            return
+        end
+
+        local Part =
+            GetNearestRemainingPart(
+                Target,
+
+                Vehicle
+                    :GetPivot()
+                    .Position
+            )
+
+        if Part then
+            print(
+                "[Debug] Hitting:",
+                Part:GetFullName()
+            )
+
+            HitPart(
+                Vehicle,
+                Part
+            )
+        end
+    end
+})
+
+DebugTab:CreateButton({
+    name = "Print Remaining Fragments",
+
+    callback = function()
+
+        local Target =
+            FindQuestTarget()
+
+        if not Target then
+            warn(
+                "No target"
+            )
+
+            return
+        end
+
+        local Parts =
+            GetRemainingParts(
+                Target
+            )
+
+        print(
+            "====== FRAGMENTS ======"
+        )
+
+        for Index,
+            Part in ipairs(
+                Parts
+            )
+        do
+            local Distance =
+                Runtime.LastTargetPosition
+                and (
+                    Part.Position
+                    - Runtime.LastTargetPosition
+                ).Magnitude
+                or 0
+
+            print(
+                Index,
+                Part:GetFullName(),
+
+                "Position:",
+                Part.Position,
+
+                "Distance:",
+                math.floor(
+                    Distance
+                )
+            )
+        end
+
+        print(
+            "TOTAL:",
+            #Parts
+        )
+    end
+})
+
+--========================================================
+-- UI - DEBUG VEHICLE
+--========================================================
+
+DebugTab:CreateSection({
+    name = "Vehicle Debug"
+})
+
+DebugTab:CreateButton({
+    name = "Print Vehicle",
+
+    callback = function()
+
+        local Vehicle =
+            FindVehicle()
+
+        if Vehicle then
+            print(
+                "[Vehicle]",
+                Vehicle:GetFullName()
+            )
+
+            print(
+                "Position:",
+                Vehicle
+                    :GetPivot()
+                    .Position
+            )
+        else
+            warn(
+                "Vehicle not found"
+            )
+        end
+    end
+})
+
+DebugTab:CreateButton({
+    name = "Collision Test Once",
+
+    callback = function()
+
+        local Target =
+            FindQuestTarget()
+
+        local Vehicle =
+            FindVehicle()
+
+        if not Target
+            or not Vehicle
+        then
+            warn(
+                "Missing target or vehicle"
+            )
+
+            return
+        end
+
+        local Part =
+            GetNearestRemainingPart(
+                Target,
+
+                Vehicle
+                    :GetPivot()
+                    .Position
+            )
+
+        if Part then
+            HitPart(
+                Vehicle,
+                Part
+            )
+        end
+    end
+})
+
+DebugTab:CreateButton({
+    name = "Cleanup Current Objective",
+
+    callback = function()
+
+        local Target =
+            FindQuestTarget()
+
+        local Vehicle =
+            FindVehicle()
+
+        if not Target
+            or not Vehicle
+        then
+            warn(
+                "Missing target or vehicle"
+            )
+
+            return
+        end
+
+        DestroyObjective(
+            Vehicle,
+            Target
+        )
+    end
+})
+
+--========================================================
+-- STARTUP
+--========================================================
+
+local StartCurrent,
+    StartMaximum,
+    StartPercent =
+    GetVehicleStorage()
+
+print(
+    "[Build & Crash Dev] Loaded"
+)
+
+print(
+    "[Quest]",
+    GetQuest(),
+    "=>",
+    QuestToObjective(
+        GetQuest()
+    )
+)
+
+print(
+    "[Vehicle Storage]",
+    StartCurrent,
+    "/",
+    StartMaximum,
+    math.floor(
+        StartPercent * 100
+    ) .. "%"
+)
+
+print(
+    "[Cleanup Radius]",
+    Settings.CleanupRadius
+)
+
+Window:Notify({
+    title = "Build & Crash Dev",
+
+    content =
+        "Loaded - Quest: "
+        .. GetQuest()
+})
