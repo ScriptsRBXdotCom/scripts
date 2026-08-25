@@ -1,0 +1,363 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+
+local BuySpinner = Remotes:WaitForChild("BuySpinner")
+local UpgradeTier = Remotes:WaitForChild("UpgradeTier")
+local StartFight = Remotes:WaitForChild("StartFight")
+local PickupSpinner = Remotes:WaitForChild("PickupSpinner")
+local DropSpinner = Remotes:WaitForChild("DropSpinner")
+
+--==================================================
+-- RAYFIELD GEN2
+--==================================================
+
+local Rayfield = loadstring(game:HttpGet(
+	"https://sirius.menu/gen2"
+))()
+
+local Window = Rayfield:CreateWindow({
+	name = "Spinner Testing",
+	subtitle = "Developer Automation Menu",
+})
+
+local MainTab = Window:CreateTab({
+	name = "Automation",
+})
+
+--==================================================
+-- STATES
+--==================================================
+
+local autoBuy = false
+local autoMerge = false
+local autoPlaceBest = false
+local autoStartFight = false
+local autoUpgrade = false
+
+--==================================================
+-- HELPERS
+--==================================================
+
+local function getPlot()
+	local plotName = LocalPlayer:GetAttribute("PlotName")
+
+	if not plotName then
+		return nil
+	end
+
+	local plots = workspace:FindFirstChild("Plots")
+
+	if not plots then
+		return nil
+	end
+
+	return plots:FindFirstChild(plotName)
+end
+
+local function getSpinnerFolder()
+	local plot = getPlot()
+
+	if not plot then
+		return nil
+	end
+
+	return plot:FindFirstChild("PlayerSpinners")
+end
+
+--==================================================
+-- AUTO BUY SPINNER
+--==================================================
+
+task.spawn(function()
+	while true do
+		if autoBuy then
+			BuySpinner:FireServer()
+			task.wait(0.2)
+		else
+			task.wait(0.25)
+		end
+	end
+end)
+
+--==================================================
+-- AUTO UPGRADE TIER
+--==================================================
+
+task.spawn(function()
+	while true do
+		if autoUpgrade then
+			UpgradeTier:FireServer()
+			task.wait(0.5)
+		else
+			task.wait(0.25)
+		end
+	end
+end)
+
+--==================================================
+-- AUTO MERGE
+--==================================================
+
+local function findMergePair()
+	local folder = getSpinnerFolder()
+
+	if not folder then
+		return nil
+	end
+
+	local tiers = {}
+
+	for _, spinner in ipairs(folder:GetChildren()) do
+		if not spinner:GetAttribute("IsHero") then
+			local tier = spinner:GetAttribute("Tier")
+			local zone = spinner:GetAttribute("Zone") or "Merge"
+
+			if tier and zone == "Merge" then
+				if tiers[tier] then
+					return tiers[tier], spinner
+				end
+
+				tiers[tier] = spinner
+			end
+		end
+	end
+
+	return nil
+end
+
+task.spawn(function()
+	while true do
+		if autoMerge then
+			local spinner1, spinner2 = findMergePair()
+
+			if spinner1 and spinner2 then
+				PickupSpinner:FireServer(spinner1)
+
+				task.wait(0.15)
+
+				if spinner1.Parent and spinner2.Parent then
+					DropSpinner:FireServer(
+						spinner2,
+						nil,
+						nil
+					)
+				end
+
+				task.wait(0.25)
+			else
+				task.wait(0.35)
+			end
+		else
+			task.wait(0.2)
+		end
+	end
+end)
+
+--==================================================
+-- BEST SPINNERS FOR ATTACK
+--==================================================
+
+local function getBestMergeSpinners()
+	local folder = getSpinnerFolder()
+
+	if not folder then
+		return {}
+	end
+
+	local spinners = {}
+
+	for _, spinner in ipairs(folder:GetChildren()) do
+		if not spinner:GetAttribute("IsHero") then
+			local zone = spinner:GetAttribute("Zone") or "Merge"
+
+			if zone == "Merge" then
+				table.insert(spinners, spinner)
+			end
+		end
+	end
+
+	table.sort(spinners, function(a, b)
+		return (a:GetAttribute("Tier") or 1)
+			> (b:GetAttribute("Tier") or 1)
+	end)
+
+	return spinners
+end
+
+local function getFreeAttackTiles()
+	local plot = getPlot()
+
+	if not plot then
+		return {}
+	end
+
+	local grids = plot:FindFirstChild("Grids")
+	local attackGrids = grids and grids:FindFirstChild("AttackGrids")
+	local folder = plot:FindFirstChild("PlayerSpinners")
+
+	if not attackGrids or not folder then
+		return {}
+	end
+
+	local occupied = {}
+
+	for _, spinner in ipairs(folder:GetChildren()) do
+		local zone = spinner:GetAttribute("Zone") or "Merge"
+
+		if zone == "Attack" then
+			local index = spinner:GetAttribute("TileIndex")
+
+			if index then
+				occupied[index] = true
+			end
+		end
+	end
+
+	local tiles = {}
+
+	for _, tile in ipairs(attackGrids:GetChildren()) do
+		local index = tile:GetAttribute("TileIndex")
+		local requiredRebirth = tile:GetAttribute("RequiredRebirth")
+
+		if index and not occupied[index] then
+			local unlocked =
+				not requiredRebirth
+				or (LocalPlayer:GetAttribute("Rebirths") or 0)
+					>= requiredRebirth
+
+			if unlocked then
+				table.insert(tiles, index)
+			end
+		end
+	end
+
+	table.sort(tiles)
+
+	return tiles
+end
+
+local function deployBest()
+	local spinners = getBestMergeSpinners()
+	local tiles = getFreeAttackTiles()
+
+	local count = math.min(
+		#spinners,
+		#tiles
+	)
+
+	if count <= 0 then
+		return
+	end
+
+	for i = 1, count do
+		if not autoPlaceBest then
+			return
+		end
+
+		local spinner = spinners[i]
+		local tileIndex = tiles[i]
+
+		if spinner and spinner.Parent then
+			PickupSpinner:FireServer(spinner)
+
+			task.wait(0.15)
+
+			if spinner.Parent then
+				DropSpinner:FireServer(
+					nil,
+					tileIndex,
+					"Attack"
+				)
+			end
+
+			task.wait(0.2)
+		end
+	end
+end
+
+--==================================================
+-- AUTO PLACE BEST
+--==================================================
+
+task.spawn(function()
+	while true do
+		if autoPlaceBest then
+			deployBest()
+			task.wait(1)
+		else
+			task.wait(0.3)
+		end
+	end
+end)
+
+--==================================================
+-- AUTO START FIGHT
+--==================================================
+
+task.spawn(function()
+	while true do
+		if autoStartFight then
+			StartFight:FireServer()
+			task.wait(1)
+		else
+			task.wait(0.25)
+		end
+	end
+end)
+
+--==================================================
+-- UI - SINGLE PAGE
+--==================================================
+
+MainTab:CreateToggle({
+	name = "Auto Buy Spinner",
+	flag = "AutoBuySpinner",
+	value = false,
+
+	callback = function(value)
+		autoBuy = value
+	end,
+})
+
+MainTab:CreateToggle({
+	name = "Auto Merge",
+	flag = "AutoMerge",
+	value = false,
+
+	callback = function(value)
+		autoMerge = value
+	end,
+})
+
+MainTab:CreateToggle({
+	name = "Auto Place Best Spinners",
+	flag = "AutoPlaceBestSpinners",
+	value = false,
+
+	callback = function(value)
+		autoPlaceBest = value
+	end,
+})
+
+MainTab:CreateToggle({
+	name = "Auto Start Fight",
+	flag = "AutoStartFight",
+	value = false,
+
+	callback = function(value)
+		autoStartFight = value
+	end,
+})
+
+MainTab:CreateToggle({
+	name = "Auto Upgrade Tier",
+	flag = "AutoUpgradeTier",
+	value = false,
+
+	callback = function(value)
+		autoUpgrade = value
+	end,
+})
