@@ -1,0 +1,358 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+
+local Player = Players.LocalPlayer
+
+--// Rayfield Gen2
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
+
+local Window = Rayfield:CreateWindow({
+    name = "Auto Farm",
+    subtitle = "Merge & Upgrades",
+    theme = "cobalt",
+})
+
+local MainTab = Window:CreateTab({
+    name = "Main"
+})
+
+--// Game modules
+local WeaponUtils = require(
+    ReplicatedStorage.GameShared.WeaponUtils
+)
+
+--// Remotes
+local KnitServices = ReplicatedStorage
+    .Packages._Index["sleitnick_knit@1.7.0"]
+    .knit.Services
+
+local MergeRemote =
+    KnitServices.MergeService.RF.Merge
+
+local BuyRemote =
+    KnitServices.MergeService.RF.Buy
+
+local EquipBestRemote =
+    KnitServices.MergeService.RF.EquipBest
+
+local UpgradeRemote =
+    KnitServices.UpgradesService.RF.Upgrade
+
+local OpenEggRemote =
+    KnitServices.EggService.RF.OpenEgg
+
+--====================================================
+-- SETTINGS
+--====================================================
+
+local Settings = {
+    AutoMerge = false,
+    AutoBuyPickaxe = false,
+    AutoWeaponLevel = false,
+    AutoSwingSpeed = false,
+    AutoEquipBest = false,
+    AutoAdventureEgg = false,
+}
+
+-- Your board appears to have 9 plot cells.
+local MAX_PLOT_ID = 9
+
+-- We don't know the exact Character slot maximum yet.
+-- Invalid locations are simply ignored by the scanner.
+local MAX_CHARACTER_ID = 20
+
+local MERGE_DELAY = 0.35
+local BUY_DELAY = 0.5
+local EQUIP_DELAY = 2
+local EGG_DELAY = 0.5
+local UPGRADE_DELAY = 30
+
+--====================================================
+-- SAFE REMOTE CALL
+--====================================================
+
+local function safeInvoke(remote, ...)
+    local arguments = {...}
+
+    local success, result = pcall(function()
+        return remote:InvokeServer(
+            table.unpack(arguments)
+        )
+    end)
+
+    if not success then
+        warn("[Auto Farm] Remote error:", result)
+    end
+
+    return success, result
+end
+
+--====================================================
+-- AUTO MERGE
+--====================================================
+
+local function location(locationType, id)
+    return {
+        type = locationType,
+        id = tostring(id)
+    }
+end
+
+local function getWeaponAt(locationData)
+    local success, weapon = pcall(function()
+        return WeaponUtils.GetPhysicalWeapon(
+            Player,
+            locationData
+        )
+    end)
+
+    if success then
+        return weapon
+    end
+
+    return nil
+end
+
+local function addLocation(groups, locationData)
+    local weapon = getWeaponAt(locationData)
+
+    if not weapon then
+        return
+    end
+
+    local weaponName = weapon.Name
+
+    groups[weaponName] =
+        groups[weaponName] or {}
+
+    table.insert(
+        groups[weaponName],
+        {
+            weapon = weapon,
+            location = locationData
+        }
+    )
+end
+
+local function scanWeapons()
+    local groups = {}
+
+    -- Plot slots
+    for id = 1, MAX_PLOT_ID do
+        addLocation(
+            groups,
+            location("Plot", id)
+        )
+    end
+
+    -- Character slots
+    for id = 1, MAX_CHARACTER_ID do
+        addLocation(
+            groups,
+            location("Character", id)
+        )
+    end
+
+    return groups
+end
+
+local function findMergePair()
+    local groups = scanWeapons()
+
+    for weaponName, entries in pairs(groups) do
+        if #entries >= 2 then
+            return entries[1], entries[2], weaponName
+        end
+    end
+
+    return nil
+end
+
+local function autoMergeOnce()
+    local first, second, weaponName =
+        findMergePair()
+
+    if not first or not second then
+        return false
+    end
+
+    print(
+        "[Auto Merge]",
+        weaponName,
+        first.location.type,
+        first.location.id,
+        "->",
+        second.location.type,
+        second.location.id
+    )
+
+    safeInvoke(
+        MergeRemote,
+        first.location,
+        second.location
+    )
+
+    return true
+end
+
+--====================================================
+-- LOOPS
+--====================================================
+
+task.spawn(function()
+    while true do
+        if Settings.AutoMerge then
+            local merged = autoMergeOnce()
+
+            if merged then
+                task.wait(MERGE_DELAY)
+            else
+                task.wait(0.75)
+            end
+        else
+            task.wait(0.25)
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if Settings.AutoBuyPickaxe then
+            safeInvoke(BuyRemote)
+            task.wait(BUY_DELAY)
+        else
+            task.wait(0.25)
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if Settings.AutoWeaponLevel then
+            safeInvoke(
+                UpgradeRemote,
+                "WeaponLevel",
+                1
+            )
+
+            task.wait(UPGRADE_DELAY)
+        else
+            task.wait(0.25)
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if Settings.AutoSwingSpeed then
+            safeInvoke(
+                UpgradeRemote,
+                "SwingSpeed",
+                1
+            )
+
+            task.wait(UPGRADE_DELAY)
+        else
+            task.wait(0.25)
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if Settings.AutoEquipBest then
+            safeInvoke(EquipBestRemote)
+            task.wait(EQUIP_DELAY)
+        else
+            task.wait(0.25)
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if Settings.AutoAdventureEgg then
+            safeInvoke(
+                OpenEggRemote,
+                "Adventure Egg",
+                1,
+                false,
+                {}
+            )
+
+            task.wait(EGG_DELAY)
+        else
+            task.wait(0.25)
+        end
+    end
+end)
+
+--====================================================
+-- UI
+--====================================================
+
+MainTab:CreateToggle({
+    name = "Auto Merge",
+    description = "Merge matching Plot + Character weapons",
+    flag = "AutoMerge",
+    value = false,
+
+    callback = function(value)
+        Settings.AutoMerge = value
+    end,
+})
+
+MainTab:CreateToggle({
+    name = "Auto Buy Pickaxe",
+    description = "Continuously buys pickaxes",
+    flag = "AutoBuyPickaxe",
+    value = false,
+
+    callback = function(value)
+        Settings.AutoBuyPickaxe = value
+    end,
+})
+
+MainTab:CreateToggle({
+    name = "Auto Weapon Level",
+    description = "Attempts WeaponLevel upgrade every 30s",
+    flag = "AutoWeaponLevel",
+    value = false,
+
+    callback = function(value)
+        Settings.AutoWeaponLevel = value
+    end,
+})
+
+MainTab:CreateToggle({
+    name = "Auto Swing Speed",
+    description = "Attempts SwingSpeed upgrade every 30s",
+    flag = "AutoSwingSpeed",
+    value = false,
+
+    callback = function(value)
+        Settings.AutoSwingSpeed = value
+    end,
+})
+
+MainTab:CreateToggle({
+    name = "Auto Equip Best",
+    description = "Automatically equips best weapons",
+    flag = "AutoEquipBest",
+    value = false,
+
+    callback = function(value)
+        Settings.AutoEquipBest = value
+    end,
+})
+
+MainTab:CreateToggle({
+    name = "Auto Adventure Egg",
+    description = "Continuously opens Adventure Egg",
+    flag = "AutoAdventureEgg",
+    value = false,
+
+    callback = function(value)
+        Settings.AutoAdventureEgg = value
+    end,
+})
