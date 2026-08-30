@@ -1,0 +1,467 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+
+local Player = Players.LocalPlayer
+
+local MTM = ReplicatedStorage:WaitForChild("MTM")
+local State = MTM:WaitForChild("State")
+local Remotes = MTM:WaitForChild("Remotes")
+
+local MineHit = Remotes:WaitForChild("MineHit")
+local TreePurchase = Remotes:WaitForChild("TreePurchase")
+
+local Mountain = workspace:WaitForChild("Mountain")
+
+local UpgradeTree = require(
+	ReplicatedStorage.Source.Features.Upgrades.UpgradeTree
+)
+
+--------------------------------------------------
+-- RAYFIELD
+--------------------------------------------------
+
+local Rayfield = loadstring(game:HttpGet(
+	"https://sirius.menu/gen2"
+))()
+
+local Window = Rayfield:CreateWindow({
+	name = "Flatten The Mountain",
+	subtitle = "Mining / Upgrades",
+
+	configuration = {
+		autoSave = true,
+		autoLoad = true,
+		fileName = "MTMDevHub"
+	}
+})
+
+local MiningTab = Window:CreateTab({
+	name = "Mining"
+})
+
+local UpgradeTab = Window:CreateTab({
+	name = "Upgrades"
+})
+
+--------------------------------------------------
+-- SETTINGS
+--------------------------------------------------
+
+local AutoMine = false
+local AutoUpgrade = false
+
+local CurrentRow = 1
+
+local Damage = 6
+local MineDelay = 0.10
+local UpgradeDelay = 1
+
+--------------------------------------------------
+-- MINING UI
+--------------------------------------------------
+
+MiningTab:CreateSection({
+	name = "Auto Mine"
+})
+
+MiningTab:CreateToggle({
+	name = "Auto Mine",
+	description = "Mines each row and continues to the next.",
+	flag = "AutoMine",
+
+	callback = function(value)
+		AutoMine = value
+		print("Auto Mine:", value)
+	end
+})
+
+MiningTab:CreateSlider({
+	name = "Hit Delay",
+
+	range = {
+		0.02,
+		1
+	},
+
+	increment = 0.01,
+	value = 0.10,
+	suffix = "s",
+
+	callback = function(value)
+		MineDelay = value
+	end
+})
+
+MiningTab:CreateSlider({
+	name = "Damage",
+
+	range = {
+		1,
+		50
+	},
+
+	increment = 1,
+	value = 6,
+
+	callback = function(value)
+		Damage = value
+	end
+})
+
+MiningTab:CreateButton({
+	name = "Reset To Row 1",
+
+	callback = function()
+		CurrentRow = 1
+
+		Window:Notify({
+			title = "Auto Mine",
+			content = "Current row reset to 1."
+		})
+	end
+})
+
+--------------------------------------------------
+-- GET BLOCKS IN ROW
+--------------------------------------------------
+
+local function getBlocksInRow(row)
+	local blocks = {}
+
+	for _, block in ipairs(Mountain:GetChildren()) do
+		if block:IsA("BasePart") then
+			local x, y, z = block.Name:match(
+				"^(%d+)_(%d+)_(%d+)$"
+			)
+
+			x = tonumber(x)
+			y = tonumber(y)
+			z = tonumber(z)
+
+			if x == row then
+				table.insert(blocks, {
+					part = block,
+					y = y,
+					z = z
+				})
+			end
+		end
+	end
+
+	table.sort(blocks, function(a, b)
+		if a.y == b.y then
+			return a.z < b.z
+		end
+
+		return a.y < b.y
+	end)
+
+	return blocks
+end
+
+--------------------------------------------------
+-- AUTO MINE LOOP
+--------------------------------------------------
+
+task.spawn(function()
+	while true do
+		if not AutoMine then
+			task.wait(0.2)
+			continue
+		end
+
+		local blocks = getBlocksInRow(CurrentRow)
+
+		-- Current row is empty
+		if #blocks == 0 then
+			print("Row", CurrentRow, "cleared")
+
+			CurrentRow += 1
+
+			print("Starting row", CurrentRow)
+
+			task.wait(0.15)
+			continue
+		end
+
+		for _, data in ipairs(blocks) do
+			if not AutoMine then
+				break
+			end
+
+			local block = data.part
+
+			while AutoMine
+				and block
+				and block.Parent
+			do
+				MineHit:FireServer(
+					block.Name,
+					Damage
+				)
+
+				task.wait(MineDelay)
+			end
+		end
+	end
+end)
+
+--------------------------------------------------
+-- UPGRADE HELPERS
+--------------------------------------------------
+
+local function decode(value)
+	if typeof(value) ~= "string" then
+		return {}
+	end
+
+	local success, result = pcall(function()
+		return HttpService:JSONDecode(value)
+	end)
+
+	if success and result then
+		return result
+	end
+
+	return {}
+end
+
+--------------------------------------------------
+-- OWNED UPGRADES
+--------------------------------------------------
+
+local function getOwned()
+	local owned = {}
+
+	local personal = decode(
+		Player:GetAttribute("OwnedUpgrades")
+	)
+
+	for id, value in pairs(personal) do
+		if value then
+			owned[id] = true
+		end
+	end
+
+	local squad = decode(
+		State:GetAttribute("SquadOwned")
+	)
+
+	for id, value in pairs(squad) do
+		if value then
+			owned[id] = true
+		end
+	end
+
+	return owned
+end
+
+--------------------------------------------------
+-- AVAILABLE UPGRADES
+--------------------------------------------------
+
+local function getAvailableUpgrades()
+	local owned = getOwned()
+	local upgrades = {}
+
+	for treeName, tree in pairs(UpgradeTree) do
+		for id, upgrade in pairs(tree) do
+			if upgrade.cost and not owned[id] then
+				local dependencyMet =
+					upgrade.dependency == "origin"
+					or owned[upgrade.dependency]
+
+				if dependencyMet then
+					table.insert(upgrades, {
+						id = id,
+						name = upgrade.name,
+						tree = treeName,
+						cost = upgrade.cost.amount
+							or math.huge,
+						currency = upgrade.cost.currency
+					})
+				end
+			end
+		end
+	end
+
+	-- Cheapest available upgrade first
+	table.sort(upgrades, function(a, b)
+		if a.cost == b.cost then
+			return a.id < b.id
+		end
+
+		return a.cost < b.cost
+	end)
+
+	return upgrades
+end
+
+--------------------------------------------------
+-- PURCHASE FUNCTION
+--------------------------------------------------
+
+local function purchaseUpgrade(upgrade)
+	if not upgrade then
+		return false
+	end
+
+	local success, purchased, reason = pcall(function()
+		return TreePurchase:InvokeServer(upgrade.id)
+	end)
+
+	if not success then
+		warn(
+			"TreePurchase error:",
+			purchased
+		)
+
+		return false
+	end
+
+	if purchased == true then
+		print(
+			"PURCHASED:",
+			upgrade.id,
+			"Cost:",
+			upgrade.cost
+		)
+
+		return true
+	end
+
+	print(
+		"Can't buy:",
+		upgrade.id,
+		reason
+	)
+
+	return false
+end
+
+--------------------------------------------------
+-- UPGRADE UI
+--------------------------------------------------
+
+UpgradeTab:CreateSection({
+	name = "Automatic Upgrades"
+})
+
+UpgradeTab:CreateToggle({
+	name = "Auto Upgrade",
+	description = "Automatically purchases available upgrades.",
+	flag = "AutoUpgrade",
+
+	callback = function(value)
+		AutoUpgrade = value
+		print("Auto Upgrade:", value)
+	end
+})
+
+UpgradeTab:CreateSlider({
+	name = "Upgrade Check Delay",
+
+	range = {
+		0.1,
+		5
+	},
+
+	increment = 0.1,
+	value = 1,
+	suffix = "s",
+
+	callback = function(value)
+		UpgradeDelay = value
+	end
+})
+
+UpgradeTab:CreateButton({
+	name = "Buy Next Upgrade",
+
+	callback = function()
+		local upgrades = getAvailableUpgrades()
+		local upgrade = upgrades[1]
+
+		if not upgrade then
+			Window:Notify({
+				title = "Upgrades",
+				content = "No available upgrades."
+			})
+
+			return
+		end
+
+		local purchased = purchaseUpgrade(upgrade)
+
+		if purchased then
+			Window:Notify({
+				title = "Purchased",
+				content =
+					upgrade.name
+					.. " ($"
+					.. tostring(upgrade.cost)
+					.. ")"
+			})
+		else
+			Window:Notify({
+				title = "Purchase Failed",
+				content =
+					"Could not buy "
+					.. tostring(upgrade.name)
+			})
+		end
+	end
+})
+
+--------------------------------------------------
+-- AUTO UPGRADE LOOP
+--------------------------------------------------
+
+task.spawn(function()
+	while true do
+		if not AutoUpgrade then
+			task.wait(0.25)
+			continue
+		end
+
+		local upgrades = getAvailableUpgrades()
+		local purchasedSomething = false
+
+		for _, upgrade in ipairs(upgrades) do
+			if not AutoUpgrade then
+				break
+			end
+
+			-- No unused "reason" variable here anymore
+			local success, result = pcall(function()
+				return TreePurchase:InvokeServer(
+					upgrade.id
+				)
+			end)
+
+			if success and result == true then
+				print(
+					"Purchased:",
+					upgrade.id,
+					upgrade.cost
+				)
+
+				purchasedSomething = true
+
+				-- Allow ownership attributes to update
+				task.wait(0.15)
+
+				-- Rescan the tree because new upgrades
+				-- may now be unlocked
+				break
+			end
+
+			task.wait(0.05)
+		end
+
+		if not purchasedSomething then
+			task.wait(UpgradeDelay)
+		end
+	end
+end)
