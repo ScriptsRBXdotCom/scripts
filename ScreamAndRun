@@ -1,0 +1,3380 @@
+--========================================================
+-- SERVICES YES THIS IS AI CODED
+--========================================================
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local Workspace = game:GetService("Workspace")
+
+local Player = Players.LocalPlayer
+
+
+--========================================================
+-- RAYFIELD
+--========================================================
+
+local Rayfield
+
+local rayOK, rayError = pcall(function()
+
+	Rayfield = loadstring(
+		game:HttpGet(
+			"https://sirius.menu/rayfield"
+		)
+	)()
+
+end)
+
+if not rayOK or not Rayfield then
+
+	warn(
+		"Rayfield failed:",
+		rayError
+	)
+
+	return
+end
+
+
+--========================================================
+-- CONFIG
+--========================================================
+
+local Config = {
+
+	ESP = {
+		MonsterHighlight = false,
+		MonsterDistance = false,
+		MonsterBox = false,
+
+		LockESP = false,
+	},
+
+	Auto = {
+		InstantPrompts = false,
+		SearchBackpacks = false,
+		AutoSafety = false,
+	},
+
+	Player = {
+		WalkSpeedEnabled = false,
+		WalkSpeed = 24,
+
+		JumpEnabled = false,
+		JumpHeight = 12,
+	},
+
+	MonsterNames = {
+		"CatInTheHat",
+		"CatInTheHat2",
+	},
+
+	Search = {
+		Attempts = 2,
+
+		TeleportDelay = 0.11,
+
+		PressTime = 0.03,
+
+		AfterPrompt = 0.09,
+
+		BetweenBackpacks = 0.045,
+
+		Radius = 2.5,
+
+		Height = 2.2,
+
+		MinimumCatDistance = 25,
+
+		DangerRetryDelay = 0.20,
+
+		MaxDangerRounds = 20,
+	},
+
+	Safety = {
+		DangerDistance = 45,
+
+		RecordDistance = 65,
+
+		SaveInterval = 0.25,
+
+		Cooldown = 0.75,
+	},
+}
+
+
+--========================================================
+-- STATE
+--========================================================
+
+local Searching = false
+
+local SearchStartCFrame = nil
+
+local LastSafeCFrame = nil
+
+local LastSafeSave = 0
+
+local LastSafetyTeleport = 0
+
+local SafetyBusy = false
+
+
+--========================================================
+-- CHARACTER HELPERS
+--========================================================
+
+local function GetCharacter()
+
+	return Player.Character
+end
+
+
+local function GetRoot()
+
+	local character =
+		GetCharacter()
+
+	if not character then
+		return nil
+	end
+
+	return character:FindFirstChild(
+		"HumanoidRootPart"
+	)
+end
+
+
+local function GetHumanoid()
+
+	local character =
+		GetCharacter()
+
+	if not character then
+		return nil
+	end
+
+	return character:FindFirstChildOfClass(
+		"Humanoid"
+	)
+end
+
+
+local function StopVelocity()
+
+	local root =
+		GetRoot()
+
+	if not root then
+		return
+	end
+
+	root.AssemblyLinearVelocity =
+		Vector3.zero
+
+	root.AssemblyAngularVelocity =
+		Vector3.zero
+end
+
+
+local function TeleportCharacter(
+	targetCFrame
+)
+
+	local character =
+		GetCharacter()
+
+	if not character then
+		return false
+	end
+
+	StopVelocity()
+
+	character:PivotTo(
+		targetCFrame
+	)
+
+	StopVelocity()
+
+	return true
+end
+
+
+--========================================================
+-- MONSTER HELPERS
+--========================================================
+
+local function IsMonsterName(
+	name
+)
+
+	for _, wanted in ipairs(
+		Config.MonsterNames
+	) do
+
+		if name == wanted then
+			return true
+		end
+	end
+
+	return false
+end
+
+
+local function GetMonsterPart(
+	monster
+)
+
+	if not monster then
+		return nil
+	end
+
+	return monster:FindFirstChild(
+		"HumanoidRootPart"
+	)
+		or monster.PrimaryPart
+		or monster:FindFirstChildWhichIsA(
+			"BasePart",
+			true
+		)
+end
+
+
+local function GetMonsters()
+
+	local result = {}
+
+	for _, object in ipairs(
+		Workspace:GetDescendants()
+	) do
+
+		if
+			object:IsA("Model")
+			and IsMonsterName(
+				object.Name
+			)
+		then
+
+			table.insert(
+				result,
+				object
+			)
+		end
+	end
+
+	return result
+end
+
+
+local function DistanceFromClosestMonster(
+	position
+)
+
+	local closest =
+		math.huge
+
+	local found =
+		false
+
+	for _, monster in ipairs(
+		GetMonsters()
+	) do
+
+		local part =
+			GetMonsterPart(
+				monster
+			)
+
+		if part then
+
+			found =
+				true
+
+			local distance =
+				(
+					position
+					- part.Position
+				).Magnitude
+
+			if distance < closest then
+
+				closest =
+					distance
+			end
+		end
+	end
+
+	if not found then
+		return math.huge
+	end
+
+	return closest
+end
+
+
+local function GetNearestMonster()
+
+	local root =
+		GetRoot()
+
+	if not root then
+
+		return nil,
+			math.huge
+	end
+
+	local nearest =
+		nil
+
+	local bestDistance =
+		math.huge
+
+	for _, monster in ipairs(
+		GetMonsters()
+	) do
+
+		local part =
+			GetMonsterPart(
+				monster
+			)
+
+		if part then
+
+			local distance =
+				(
+					root.Position
+					- part.Position
+				).Magnitude
+
+			if distance < bestDistance then
+
+				bestDistance =
+					distance
+
+				nearest =
+					monster
+			end
+		end
+	end
+
+	return nearest,
+		bestDistance
+end
+
+
+--========================================================
+-- FACE TARGET
+--========================================================
+
+local function FaceTarget(
+	position,
+	targetPosition
+)
+
+	local target =
+		Vector3.new(
+			targetPosition.X,
+			position.Y,
+			targetPosition.Z
+		)
+
+	if
+		(
+			target
+			- position
+		).Magnitude < 0.1
+	then
+
+		target =
+			position
+			+ Vector3.new(
+				0,
+				0,
+				-1
+			)
+	end
+
+	return CFrame.lookAt(
+		position,
+		target
+	)
+end
+
+
+--========================================================
+-- FIND SAFEST POSITION AROUND PART
+--========================================================
+
+local function FindSafestCirclePosition(
+	part,
+	radius,
+	height,
+	samples
+)
+
+	if not part or not part.Parent then
+
+		return nil,
+			-math.huge
+	end
+
+	local bestPosition =
+		nil
+
+	local bestMonsterDistance =
+		-math.huge
+
+	samples =
+		samples or 12
+
+	for i = 1, samples do
+
+		local angle =
+			(
+				(i - 1)
+				/ samples
+			)
+			* math.pi
+			* 2
+
+		local position =
+			part.Position
+			+ Vector3.new(
+				math.cos(angle) * radius,
+				height,
+				math.sin(angle) * radius
+			)
+
+		local monsterDistance =
+			DistanceFromClosestMonster(
+				position
+			)
+
+		if
+			monsterDistance
+			> bestMonsterDistance
+		then
+
+			bestMonsterDistance =
+				monsterDistance
+
+			bestPosition =
+				position
+		end
+	end
+
+	return bestPosition,
+		bestMonsterDistance
+end
+
+
+--========================================================
+-- BACKPACKS
+--========================================================
+
+local function GetBackpacks()
+
+	local folder =
+		Workspace:FindFirstChild(
+			"BackPack"
+		)
+
+	if not folder then
+		return {}
+	end
+
+	local result = {}
+
+	for _, backpack in ipairs(
+		folder:GetChildren()
+	) do
+
+		local handle =
+			backpack:FindFirstChild(
+				"Handle"
+			)
+
+		if
+			handle
+			and handle:IsA(
+				"BasePart"
+			)
+		then
+
+			local prompt =
+				handle:FindFirstChild(
+					"SearchBackpack"
+				)
+
+			if
+				prompt
+				and prompt:IsA(
+					"ProximityPrompt"
+				)
+			then
+
+				table.insert(
+					result,
+					{
+						Model =
+							backpack,
+
+						Handle =
+							handle,
+
+						Prompt =
+							prompt,
+					}
+				)
+			end
+		end
+	end
+
+	return result
+end
+
+
+--========================================================
+-- LOCK TARGETS
+--========================================================
+
+local LockNames = {
+	"GreenLock",
+	"RedLock",
+	"WhiteLock",
+}
+
+
+local function GetLockMainPart(
+	container
+)
+
+	if not container then
+		return nil
+	end
+
+	local directLock =
+		container:FindFirstChild(
+			"Lock"
+		)
+
+	if
+		directLock
+		and directLock:IsA(
+			"BasePart"
+		)
+	then
+
+		return directLock
+	end
+
+	if container:IsA("BasePart") then
+
+		return container
+	end
+
+	return container:
+		FindFirstChildWhichIsA(
+			"BasePart",
+			true
+		)
+end
+
+
+local function GetLocks()
+
+	local result = {}
+
+	for _, name in ipairs(
+		LockNames
+	) do
+
+		local container =
+			Workspace:FindFirstChild(
+				name
+			)
+
+		if container then
+
+			local part =
+				GetLockMainPart(
+					container
+				)
+
+			if part then
+
+				table.insert(
+					result,
+					{
+						Name =
+							name,
+
+						Container =
+							container,
+
+						Part =
+							part,
+					}
+				)
+			end
+		end
+	end
+
+	return result
+end
+
+
+--========================================================
+-- LOCK TELEPORT POSITION
+--========================================================
+
+local function GetLockTeleportCFrame(
+	lockInfo
+)
+
+	if
+		not lockInfo
+		or not lockInfo.Part
+	then
+
+		return nil
+	end
+
+	local part =
+		lockInfo.Part
+
+	local character =
+		GetCharacter()
+
+	local rayParams =
+		RaycastParams.new()
+
+	rayParams.FilterType =
+		Enum.RaycastFilterType.Exclude
+
+	local exclude = {}
+
+	if character then
+
+		table.insert(
+			exclude,
+			character
+		)
+	end
+
+	if lockInfo.Container then
+
+		table.insert(
+			exclude,
+			lockInfo.Container
+		)
+	end
+
+	rayParams.FilterDescendantsInstances =
+		exclude
+
+
+	local bestPosition =
+		nil
+
+	local bestScore =
+		-math.huge
+
+
+	for i = 1, 16 do
+
+		local angle =
+			(
+				(i - 1)
+				/ 16
+			)
+			* math.pi
+			* 2
+
+
+		local candidate =
+			part.Position
+			+ Vector3.new(
+				math.cos(angle) * 4,
+				0,
+				math.sin(angle) * 4
+			)
+
+
+		local result =
+			Workspace:Raycast(
+
+				candidate
+				+ Vector3.new(
+					0,
+					7,
+					0
+				),
+
+				Vector3.new(
+					0,
+					-18,
+					0
+				),
+
+				rayParams
+			)
+
+
+		if
+			result
+			and result.Instance
+			and result.Normal.Y > 0.55
+		then
+
+			if
+				not result.Instance:IsA(
+					"BasePart"
+				)
+				or result.Instance.CanCollide
+			then
+
+				local position =
+					result.Position
+					+ Vector3.new(
+						0,
+						3,
+						0
+					)
+
+				local monsterDistance =
+					DistanceFromClosestMonster(
+						position
+					)
+
+				if
+					monsterDistance
+					> bestScore
+				then
+
+					bestScore =
+						monsterDistance
+
+					bestPosition =
+						position
+				end
+			end
+		end
+	end
+
+
+	if not bestPosition then
+
+		bestPosition =
+			part.Position
+			+ Vector3.new(
+				0,
+				2.5,
+				4
+			)
+	end
+
+
+	return FaceTarget(
+		bestPosition,
+		part.Position
+	)
+end
+
+
+--========================================================
+-- LOCK TELEPORT HELPERS
+--========================================================
+
+local function FindNearestLock()
+
+	local root =
+		GetRoot()
+
+	if not root then
+		return nil
+	end
+
+	local best =
+		nil
+
+	local bestDistance =
+		math.huge
+
+	for _, lockInfo in ipairs(
+		GetLocks()
+	) do
+
+		local distance =
+			(
+				root.Position
+				- lockInfo.Part.Position
+			).Magnitude
+
+		if distance < bestDistance then
+
+			bestDistance =
+				distance
+
+			best =
+				lockInfo
+		end
+	end
+
+	return best
+end
+
+
+local function FindSafestLock()
+
+	local best =
+		nil
+
+	local bestDistance =
+		-math.huge
+
+	for _, lockInfo in ipairs(
+		GetLocks()
+	) do
+
+		local distance =
+			DistanceFromClosestMonster(
+				lockInfo.Part.Position
+			)
+
+		if distance > bestDistance then
+
+			bestDistance =
+				distance
+
+			best =
+				lockInfo
+		end
+	end
+
+	return best
+end
+
+
+local function TeleportToLock(
+	lockInfo
+)
+
+	if not lockInfo then
+		return false
+	end
+
+	local cframe =
+		GetLockTeleportCFrame(
+			lockInfo
+		)
+
+	if not cframe then
+		return false
+	end
+
+	return TeleportCharacter(
+		cframe
+	)
+end
+
+
+--========================================================
+-- INSTA WIN
+--========================================================
+
+local function GetExitTouchPart()
+
+	local exit =
+		Workspace:FindFirstChild(
+			"Exit"
+		)
+
+	if not exit then
+		return nil
+	end
+
+	----------------------------------------------------
+	-- workspace.Exit itself might be the touching part
+	----------------------------------------------------
+
+	if exit:IsA("BasePart") then
+
+		return exit
+	end
+
+
+	----------------------------------------------------
+	-- Prefer a BasePart that actually contains
+	-- TouchInterest.
+	----------------------------------------------------
+
+	for _, object in ipairs(
+		exit:GetDescendants()
+	) do
+
+		if
+			object:IsA("BasePart")
+			and object:FindFirstChildWhichIsA(
+				"TouchTransmitter"
+			)
+		then
+
+			return object
+		end
+	end
+
+
+	----------------------------------------------------
+	-- Some executors / explorers display TouchInterest
+	-- slightly differently, so also check by name.
+	----------------------------------------------------
+
+	for _, object in ipairs(
+		exit:GetDescendants()
+	) do
+
+		if object:IsA("BasePart") then
+
+			local touch =
+				object:FindFirstChild(
+					"TouchInterest"
+				)
+
+			if touch then
+				return object
+			end
+		end
+	end
+
+
+	----------------------------------------------------
+	-- Final fallback = any BasePart inside Exit.
+	----------------------------------------------------
+
+	return exit:
+		FindFirstChildWhichIsA(
+			"BasePart",
+			true
+		)
+end
+
+
+local function InstaWin()
+
+	local root =
+		GetRoot()
+
+	local character =
+		GetCharacter()
+
+	local exitPart =
+		GetExitTouchPart()
+
+
+	if
+		not root
+		or not character
+	then
+
+		return
+	end
+
+
+	if not exitPart then
+
+		Rayfield:Notify({
+
+			Title =
+				"Insta Win",
+
+			Content =
+				"workspace.Exit was not found.",
+
+			Duration =
+				3,
+		})
+
+		return
+	end
+
+
+	----------------------------------------------------
+	-- Save where we were standing.
+	----------------------------------------------------
+
+	local oldCFrame =
+		root.CFrame
+
+
+	----------------------------------------------------
+	-- Stop movement first.
+	----------------------------------------------------
+
+	StopVelocity()
+
+
+	----------------------------------------------------
+	-- If firetouchinterest exists, explicitly fire
+	-- touch begin/end several times.
+	----------------------------------------------------
+
+	if
+		type(firetouchinterest)
+		== "function"
+	then
+
+		for _ = 1, 5 do
+
+			pcall(
+				firetouchinterest,
+				root,
+				exitPart,
+				0
+			)
+
+
+			task.wait(0.03)
+
+
+			pcall(
+				firetouchinterest,
+				root,
+				exitPart,
+				1
+			)
+
+
+			task.wait(0.03)
+		end
+	end
+
+
+	----------------------------------------------------
+	-- PHYSICAL FALLBACK:
+	--
+	-- Move through the Exit rather than landing at one
+	-- position for a single frame.
+	----------------------------------------------------
+
+	local exitCF =
+		exitPart.CFrame
+
+
+	local positions = {
+
+		exitCF
+			* CFrame.new(
+				0,
+				2,
+				5
+			),
+
+		exitCF
+			* CFrame.new(
+				0,
+				2,
+				1
+			),
+
+		exitCF
+			* CFrame.new(
+				0,
+				2,
+				0
+			),
+
+		exitCF
+			* CFrame.new(
+				0,
+				2,
+				-1
+			),
+
+		exitCF
+			* CFrame.new(
+				0,
+				2,
+				-5
+			),
+	}
+
+
+	for pass = 1, 3 do
+
+		for _, cframe in ipairs(
+			positions
+		) do
+
+			if not character.Parent then
+				return
+			end
+
+
+			StopVelocity()
+
+
+			character:PivotTo(
+				cframe
+			)
+
+
+			StopVelocity()
+
+
+			------------------------------------------------
+			-- Give Touched a real physics frame.
+			------------------------------------------------
+
+			RunService.Heartbeat:Wait()
+
+			RunService.Heartbeat:Wait()
+		end
+	end
+
+
+	----------------------------------------------------
+	-- Stay inside the exit briefly so server-side touch
+	-- logic has time to register.
+	----------------------------------------------------
+
+	character:PivotTo(
+		exitPart.CFrame
+	)
+
+
+	StopVelocity()
+
+
+	task.wait(0.35)
+
+
+	----------------------------------------------------
+	-- If the win script didn't move/kill/end us,
+	-- return to where we came from after a short wait.
+	----------------------------------------------------
+
+	if
+		character.Parent
+		and root.Parent
+	then
+
+		local distanceFromExit =
+			(
+				root.Position
+				- exitPart.Position
+			).Magnitude
+
+
+		if distanceFromExit < 20 then
+
+			character:PivotTo(
+				oldCFrame
+			)
+
+
+			StopVelocity()
+		end
+	end
+end
+
+
+--========================================================
+-- INSTANT PROXIMITY PROMPTS
+--========================================================
+
+local OriginalPromptTimes = {}
+
+local PromptConnection =
+	nil
+
+
+local function MakePromptInstant(
+	prompt
+)
+
+	if
+		not prompt:IsA(
+			"ProximityPrompt"
+		)
+	then
+
+		return
+	end
+
+	if
+		OriginalPromptTimes[
+			prompt
+		] == nil
+	then
+
+		OriginalPromptTimes[
+			prompt
+		] =
+			prompt.HoldDuration
+	end
+
+	prompt.HoldDuration =
+		0
+end
+
+
+local function SetInstantPrompts(
+	enabled
+)
+
+	Config.Auto.InstantPrompts =
+		enabled
+
+	if enabled then
+
+		for _, object in ipairs(
+			Workspace:GetDescendants()
+		) do
+
+			if object:IsA(
+				"ProximityPrompt"
+			) then
+
+				MakePromptInstant(
+					object
+				)
+			end
+		end
+
+
+		if PromptConnection then
+
+			PromptConnection:
+				Disconnect()
+		end
+
+
+		PromptConnection =
+			Workspace.DescendantAdded:
+				Connect(
+
+					function(object)
+
+						if
+							Config.Auto.InstantPrompts
+							and object:IsA(
+								"ProximityPrompt"
+							)
+						then
+
+							task.defer(
+								function()
+
+									if object.Parent then
+
+										MakePromptInstant(
+											object
+										)
+									end
+								end
+							)
+						end
+					end
+				)
+
+	else
+
+		if PromptConnection then
+
+			PromptConnection:
+				Disconnect()
+
+			PromptConnection =
+				nil
+		end
+
+
+		for prompt,
+			oldTime in pairs(
+				OriginalPromptTimes
+			)
+		do
+
+			if prompt.Parent then
+
+				prompt.HoldDuration =
+					oldTime
+			end
+		end
+
+
+		table.clear(
+			OriginalPromptTimes
+		)
+	end
+end
+
+
+--========================================================
+-- TRIGGER PROMPT
+--========================================================
+
+local function TriggerPrompt(
+	prompt
+)
+
+	if
+		not prompt
+		or not prompt.Parent
+		or not prompt.Enabled
+	then
+
+		return false
+	end
+
+
+	if
+		type(fireproximityprompt)
+		== "function"
+	then
+
+		local success =
+			pcall(
+				fireproximityprompt,
+				prompt
+			)
+
+		if success then
+			return true
+		end
+	end
+
+
+	local success =
+		pcall(function()
+
+			prompt:InputHoldBegin()
+
+
+			if Config.Auto.InstantPrompts then
+
+				task.wait(
+					Config.Search.PressTime
+				)
+
+			else
+
+				task.wait(
+
+					math.max(
+
+						prompt.HoldDuration,
+
+						Config.Search.PressTime
+					)
+				)
+			end
+
+
+			prompt:InputHoldEnd()
+
+		end)
+
+
+	return success
+end
+
+
+--========================================================
+-- TELEPORT TO BACKPACK
+--========================================================
+
+local function TeleportToBackpack(
+	info
+)
+
+	if
+		not info
+		or not info.Handle
+		or not info.Handle.Parent
+	then
+
+		return false,
+			0
+	end
+
+
+	local position,
+		monsterDistance =
+		FindSafestCirclePosition(
+
+			info.Handle,
+
+			Config.Search.Radius,
+
+			Config.Search.Height,
+
+			12
+		)
+
+
+	if not position then
+
+		return false,
+			0
+	end
+
+
+	if
+		monsterDistance
+		< Config.Search.MinimumCatDistance
+	then
+
+		return false,
+			monsterDistance
+	end
+
+
+	return TeleportCharacter(
+
+		FaceTarget(
+			position,
+			info.Handle.Position
+		)
+
+	), monsterDistance
+end
+
+
+--========================================================
+-- SEARCH ONE BACKPACK
+--========================================================
+
+local function SearchBackpack(
+	info
+)
+
+	if
+		not info
+		or not info.Handle.Parent
+		or not info.Prompt.Parent
+	then
+
+		return true
+	end
+
+
+	local moved,
+		monsterDistance =
+		TeleportToBackpack(
+			info
+		)
+
+
+	if not moved then
+
+		return false,
+			monsterDistance
+	end
+
+
+	task.wait(
+		Config.Search.TeleportDelay
+	)
+
+
+	local root =
+		GetRoot()
+
+
+	if root then
+
+		local newDistance =
+			DistanceFromClosestMonster(
+				root.Position
+			)
+
+
+		if
+			newDistance
+			< Config.Search.MinimumCatDistance
+		then
+
+			return false,
+				newDistance
+		end
+	end
+
+
+	StopVelocity()
+
+
+	for _ = 1,
+		Config.Search.Attempts
+	do
+
+		if
+			not Config.Auto.SearchBackpacks
+		then
+
+			return false,
+				0
+		end
+
+
+		if
+			not info.Prompt.Parent
+			or not info.Handle.Parent
+		then
+
+			return true,
+				math.huge
+		end
+
+
+		TriggerPrompt(
+			info.Prompt
+		)
+
+
+		task.wait(
+			Config.Search.AfterPrompt
+		)
+
+
+		if
+			not info.Prompt.Parent
+			or not info.Prompt.Enabled
+		then
+
+			return true,
+				math.huge
+		end
+	end
+
+
+	return true,
+		math.huge
+end
+
+
+--========================================================
+-- SAVE SAFE LOCATION
+--========================================================
+
+local function UpdateSafeLocation()
+
+	if Searching or SafetyBusy then
+		return
+	end
+
+
+	local root =
+		GetRoot()
+
+	if not root then
+		return
+	end
+
+
+	local now =
+		os.clock()
+
+
+	if
+		now - LastSafeSave
+		< Config.Safety.SaveInterval
+	then
+
+		return
+	end
+
+
+	LastSafeSave =
+		now
+
+
+	local monsterDistance =
+		DistanceFromClosestMonster(
+			root.Position
+		)
+
+
+	if
+		monsterDistance
+		>= Config.Safety.RecordDistance
+	then
+
+		LastSafeCFrame =
+			root.CFrame
+	end
+end
+
+
+--========================================================
+-- RETURN AFTER SEARCH
+--========================================================
+
+local function ReturnAfterSearch()
+
+	local root =
+		GetRoot()
+
+	if not root then
+		return
+	end
+
+
+	if SearchStartCFrame then
+
+		local distance =
+			DistanceFromClosestMonster(
+				SearchStartCFrame.Position
+			)
+
+
+		if distance >= 35 then
+
+			TeleportCharacter(
+				SearchStartCFrame
+			)
+
+			return
+		end
+	end
+
+
+	if LastSafeCFrame then
+
+		local distance =
+			DistanceFromClosestMonster(
+				LastSafeCFrame.Position
+			)
+
+
+		if distance >= 35 then
+
+			TeleportCharacter(
+				LastSafeCFrame
+			)
+
+			return
+		end
+	end
+
+
+	if
+		DistanceFromClosestMonster(
+			root.Position
+		) >= 35
+	then
+
+		return
+	end
+
+
+	local safestLock =
+		FindSafestLock()
+
+
+	if safestLock then
+
+		TeleportToLock(
+			safestLock
+		)
+	end
+end
+
+
+--========================================================
+-- AUTO SEARCH ALL BACKPACKS
+--========================================================
+
+local function AutoSearchBackpacks()
+
+	if Searching then
+		return
+	end
+
+
+	local root =
+		GetRoot()
+
+	if not root then
+		return
+	end
+
+
+	Searching =
+		true
+
+
+	SearchStartCFrame =
+		root.CFrame
+
+
+	local waiting =
+		GetBackpacks()
+
+
+	local total =
+		#waiting
+
+
+	local searched =
+		0
+
+
+	local dangerRounds =
+		0
+
+
+	while
+		Config.Auto.SearchBackpacks
+		and #waiting > 0
+	do
+
+		local madeProgress =
+			false
+
+
+		local nextRound = {}
+
+
+		for _, info in ipairs(
+			waiting
+		) do
+
+			if
+				not Config.Auto.SearchBackpacks
+			then
+
+				break
+			end
+
+
+			local success,
+				monsterDistance =
+				SearchBackpack(
+					info
+				)
+
+
+			if success then
+
+				searched =
+					searched + 1
+
+
+				madeProgress =
+					true
+
+			else
+
+				table.insert(
+					nextRound,
+					info
+				)
+
+
+				if
+					monsterDistance
+					< Config.Search.MinimumCatDistance
+				then
+
+					task.wait(
+						0.03
+					)
+				end
+			end
+
+
+			task.wait(
+				Config.Search.BetweenBackpacks
+			)
+		end
+
+
+		waiting =
+			nextRound
+
+
+		if #waiting == 0 then
+			break
+		end
+
+
+		dangerRounds =
+			dangerRounds + 1
+
+
+		if
+			dangerRounds
+			>= Config.Search.MaxDangerRounds
+		then
+
+			break
+		end
+
+
+		if not madeProgress then
+
+			task.wait(
+				Config.Search.DangerRetryDelay
+			)
+
+		else
+
+			task.wait(
+				0.08
+			)
+		end
+	end
+
+
+	Config.Auto.SearchBackpacks =
+		false
+
+
+	Searching =
+		false
+
+
+	ReturnAfterSearch()
+
+
+	pcall(function()
+
+		Rayfield:Notify({
+
+			Title =
+				"Auto Search",
+
+			Content =
+				string.format(
+					"Finished %d/%d backpacks.",
+					searched,
+					total
+				),
+
+			Duration =
+				4,
+		})
+
+	end)
+end
+
+
+--========================================================
+-- AUTO SAFETY
+--========================================================
+
+local function AutoSafetyUpdate()
+
+	UpdateSafeLocation()
+
+
+	if
+		not Config.Auto.AutoSafety
+	then
+
+		return
+	end
+
+
+	if Searching or SafetyBusy then
+		return
+	end
+
+
+	local monster,
+		distance =
+		GetNearestMonster()
+
+
+	if not monster then
+		return
+	end
+
+
+	if
+		distance
+		> Config.Safety.DangerDistance
+	then
+
+		return
+	end
+
+
+	if
+		os.clock()
+		- LastSafetyTeleport
+		< Config.Safety.Cooldown
+	then
+
+		return
+	end
+
+
+	SafetyBusy =
+		true
+
+
+	LastSafetyTeleport =
+		os.clock()
+
+
+	if LastSafeCFrame then
+
+		local currentSafety =
+			DistanceFromClosestMonster(
+				LastSafeCFrame.Position
+			)
+
+
+		if
+			currentSafety
+			>= Config.Safety.DangerDistance
+		then
+
+			TeleportCharacter(
+				LastSafeCFrame
+			)
+
+
+			task.wait(
+				0.05
+			)
+
+
+			SafetyBusy =
+				false
+
+
+			return
+		end
+	end
+
+
+	local lock =
+		FindSafestLock()
+
+
+	if lock then
+
+		TeleportToLock(
+			lock
+		)
+
+
+		task.wait(
+			0.05
+		)
+
+
+		local _,
+			afterDistance =
+			GetNearestMonster()
+
+
+		if
+			afterDistance
+			> Config.Safety.DangerDistance
+		then
+
+			SafetyBusy =
+				false
+
+
+			return
+		end
+	end
+
+
+	local bestBackpack =
+		nil
+
+	local bestDistance =
+		-math.huge
+
+
+	for _, info in ipairs(
+		GetBackpacks()
+	) do
+
+		local position,
+			distance =
+			FindSafestCirclePosition(
+
+				info.Handle,
+
+				Config.Search.Radius,
+
+				Config.Search.Height,
+
+				12
+			)
+
+
+		if
+			position
+			and distance > bestDistance
+		then
+
+			bestDistance =
+				distance
+
+			bestBackpack =
+				{
+					Info =
+						info,
+
+					Position =
+						position,
+				}
+		end
+	end
+
+
+	if
+		bestBackpack
+		and bestDistance
+			> Config.Safety.DangerDistance
+	then
+
+		TeleportCharacter(
+
+			FaceTarget(
+
+				bestBackpack.Position,
+
+				bestBackpack.Info.Handle.Position
+			)
+		)
+	end
+
+
+	SafetyBusy =
+		false
+end
+
+
+--========================================================
+-- MONSTER ESP
+--========================================================
+
+local MonsterESP = {}
+
+
+local function CreateMonsterESP(
+	monster
+)
+
+	if MonsterESP[monster] then
+		return
+	end
+
+
+	local rootPart =
+		GetMonsterPart(
+			monster
+		)
+
+
+	if not rootPart then
+		return
+	end
+
+
+	local highlight =
+		Instance.new(
+			"Highlight"
+		)
+
+
+	highlight.Name =
+		"_MonsterHighlight"
+
+
+	highlight.Adornee =
+		monster
+
+
+	highlight.DepthMode =
+		Enum.HighlightDepthMode.AlwaysOnTop
+
+
+	highlight.FillTransparency =
+		0.55
+
+
+	highlight.OutlineTransparency =
+		0
+
+
+	highlight.Enabled =
+		false
+
+
+	highlight.Parent =
+		monster
+
+
+	local gui =
+		Instance.new(
+			"BillboardGui"
+		)
+
+
+	gui.Name =
+		"_MonsterDistance"
+
+
+	gui.Adornee =
+		rootPart
+
+
+	gui.Size =
+		UDim2.fromOffset(
+			220,
+			38
+		)
+
+
+	gui.StudsOffset =
+		Vector3.new(
+			0,
+			3.5,
+			0
+		)
+
+
+	gui.AlwaysOnTop =
+		true
+
+
+	gui.Enabled =
+		false
+
+
+	gui.Parent =
+		rootPart
+
+
+	local label =
+		Instance.new(
+			"TextLabel"
+		)
+
+
+	label.Size =
+		UDim2.fromScale(
+			1,
+			1
+		)
+
+
+	label.BackgroundTransparency =
+		1
+
+
+	label.TextScaled =
+		true
+
+
+	label.TextStrokeTransparency =
+		0
+
+
+	label.Font =
+		Enum.Font.GothamBold
+
+
+	label.Parent =
+		gui
+
+
+	local box =
+		Instance.new(
+			"SelectionBox"
+		)
+
+
+	box.Name =
+		"_MonsterBox"
+
+
+	box.Adornee =
+		monster
+
+
+	box.SurfaceTransparency =
+		1
+
+
+	box.LineThickness =
+		0.04
+
+
+	box.Visible =
+		false
+
+
+	box.Parent =
+		monster
+
+
+	MonsterESP[monster] = {
+
+		Highlight =
+			highlight,
+
+		Gui =
+			gui,
+
+		Label =
+			label,
+
+		Box =
+			box,
+	}
+end
+
+
+local function UpdateMonsterESP()
+
+	local root =
+		GetRoot()
+
+
+	for monster,
+		data in pairs(
+			MonsterESP
+		)
+	do
+
+		if not monster.Parent then
+
+			MonsterESP[monster] =
+				nil
+
+			continue
+		end
+
+
+		data.Highlight.Enabled =
+			Config.ESP.MonsterHighlight
+
+
+		data.Gui.Enabled =
+			Config.ESP.MonsterDistance
+
+
+		data.Box.Visible =
+			Config.ESP.MonsterBox
+
+
+		if
+			Config.ESP.MonsterDistance
+			and root
+		then
+
+			local monsterPart =
+				GetMonsterPart(
+					monster
+				)
+
+
+			if monsterPart then
+
+				local distance =
+					(
+						root.Position
+						- monsterPart.Position
+					).Magnitude
+
+
+				data.Label.Text =
+					string.format(
+						"%s [%.0f studs]",
+						monster.Name,
+						distance
+					)
+			end
+		end
+	end
+end
+
+
+--========================================================
+-- LOCK ESP
+--========================================================
+
+local LockESP = {}
+
+
+local function CreateLockESP(
+	lockInfo
+)
+
+	if not lockInfo then
+		return
+	end
+
+
+	local key =
+		lockInfo.Container
+
+
+	if LockESP[key] then
+		return
+	end
+
+
+	local highlight =
+		Instance.new(
+			"Highlight"
+		)
+
+
+	highlight.Name =
+		"_LockESP"
+
+
+	highlight.Adornee =
+		lockInfo.Container
+
+
+	highlight.DepthMode =
+		Enum.HighlightDepthMode.AlwaysOnTop
+
+
+	highlight.FillTransparency =
+		0.55
+
+
+	highlight.OutlineTransparency =
+		0
+
+
+	highlight.Enabled =
+		false
+
+
+	highlight.Parent =
+		lockInfo.Container
+
+
+	local gui =
+		Instance.new(
+			"BillboardGui"
+		)
+
+
+	gui.Name =
+		"_LockDistance"
+
+
+	gui.Adornee =
+		lockInfo.Part
+
+
+	gui.Size =
+		UDim2.fromOffset(
+			180,
+			36
+		)
+
+
+	gui.StudsOffset =
+		Vector3.new(
+			0,
+			2.5,
+			0
+		)
+
+
+	gui.AlwaysOnTop =
+		true
+
+
+	gui.Enabled =
+		false
+
+
+	gui.Parent =
+		lockInfo.Part
+
+
+	local label =
+		Instance.new(
+			"TextLabel"
+		)
+
+
+	label.Size =
+		UDim2.fromScale(
+			1,
+			1
+		)
+
+
+	label.BackgroundTransparency =
+		1
+
+
+	label.TextScaled =
+		true
+
+
+	label.TextStrokeTransparency =
+		0
+
+
+	label.Font =
+		Enum.Font.GothamBold
+
+
+	label.Parent =
+		gui
+
+
+	LockESP[key] = {
+
+		Info =
+			lockInfo,
+
+		Highlight =
+			highlight,
+
+		Gui =
+			gui,
+
+		Label =
+			label,
+	}
+end
+
+
+local function ScanLocks()
+
+	for _, lockInfo in ipairs(
+		GetLocks()
+	) do
+
+		CreateLockESP(
+			lockInfo
+		)
+	end
+end
+
+
+local function UpdateLockESP()
+
+	local root =
+		GetRoot()
+
+
+	for container,
+		data in pairs(
+			LockESP
+		)
+	do
+
+		if not container.Parent then
+
+			LockESP[container] =
+				nil
+
+			continue
+		end
+
+
+		data.Highlight.Enabled =
+			Config.ESP.LockESP
+
+
+		data.Gui.Enabled =
+			Config.ESP.LockESP
+
+
+		if
+			Config.ESP.LockESP
+			and root
+			and data.Info.Part
+			and data.Info.Part.Parent
+		then
+
+			local distance =
+				(
+					root.Position
+					- data.Info.Part.Position
+				).Magnitude
+
+
+			data.Label.Text =
+				string.format(
+					"%s [%.0f studs]",
+					data.Info.Name,
+					distance
+				)
+		end
+	end
+end
+
+
+--========================================================
+-- FULLBRIGHT
+--========================================================
+
+local OriginalLighting = {
+
+	Brightness =
+		Lighting.Brightness,
+
+	ClockTime =
+		Lighting.ClockTime,
+
+	Ambient =
+		Lighting.Ambient,
+
+	OutdoorAmbient =
+		Lighting.OutdoorAmbient,
+
+	GlobalShadows =
+		Lighting.GlobalShadows,
+}
+
+
+local EffectStates = {}
+
+local AtmosphereStates = {}
+
+
+local function SetFullbright(
+	enabled
+)
+
+	if enabled then
+
+		Lighting.Brightness =
+			3
+
+
+		Lighting.ClockTime =
+			14
+
+
+		Lighting.Ambient =
+			Color3.fromRGB(
+				185,
+				185,
+				185
+			)
+
+
+		Lighting.OutdoorAmbient =
+			Color3.fromRGB(
+				185,
+				185,
+				185
+			)
+
+
+		Lighting.GlobalShadows =
+			false
+
+
+		for _, object in ipairs(
+			Lighting:GetChildren()
+		) do
+
+			if
+				object:IsA(
+					"BloomEffect"
+				)
+				or object:IsA(
+					"DepthOfFieldEffect"
+				)
+				or object:IsA(
+					"ColorCorrectionEffect"
+				)
+				or object:IsA(
+					"SunRaysEffect"
+				)
+				or object:IsA(
+					"BlurEffect"
+				)
+			then
+
+				if
+					EffectStates[object]
+					== nil
+				then
+
+					EffectStates[object] =
+						object.Enabled
+				end
+
+
+				object.Enabled =
+					false
+
+
+			elseif object:IsA(
+				"Atmosphere"
+			) then
+
+				if
+					AtmosphereStates[
+						object
+					] == nil
+				then
+
+					AtmosphereStates[
+						object
+					] = {
+
+						Density =
+							object.Density,
+
+						Haze =
+							object.Haze,
+
+						Glare =
+							object.Glare,
+					}
+				end
+
+
+				object.Density =
+					0
+
+
+				object.Haze =
+					0
+
+
+				object.Glare =
+					0
+			end
+		end
+
+
+	else
+
+		Lighting.Brightness =
+			OriginalLighting.Brightness
+
+
+		Lighting.ClockTime =
+			OriginalLighting.ClockTime
+
+
+		Lighting.Ambient =
+			OriginalLighting.Ambient
+
+
+		Lighting.OutdoorAmbient =
+			OriginalLighting.OutdoorAmbient
+
+
+		Lighting.GlobalShadows =
+			OriginalLighting.GlobalShadows
+
+
+		for object,
+			state in pairs(
+				EffectStates
+			)
+		do
+
+			if object.Parent then
+
+				object.Enabled =
+					state
+			end
+		end
+
+
+		for object,
+			state in pairs(
+				AtmosphereStates
+			)
+		do
+
+			if object.Parent then
+
+				object.Density =
+					state.Density
+
+
+				object.Haze =
+					state.Haze
+
+
+				object.Glare =
+					state.Glare
+			end
+		end
+
+
+		table.clear(
+			EffectStates
+		)
+
+
+		table.clear(
+			AtmosphereStates
+		)
+	end
+end
+
+
+--========================================================
+-- PLAYER MODS
+--========================================================
+
+local OriginalHumanoid =
+	setmetatable(
+		{},
+		{
+			__mode = "k"
+		}
+	)
+
+
+local function SaveHumanoid(
+	humanoid
+)
+
+	if
+		OriginalHumanoid[
+			humanoid
+		]
+	then
+
+		return
+	end
+
+
+	OriginalHumanoid[
+		humanoid
+	] = {
+
+		WalkSpeed =
+			humanoid.WalkSpeed,
+
+		JumpHeight =
+			humanoid.JumpHeight,
+
+		UseJumpPower =
+			humanoid.UseJumpPower,
+	}
+end
+
+
+local function ApplyPlayerMods()
+
+	local humanoid =
+		GetHumanoid()
+
+
+	if not humanoid then
+		return
+	end
+
+
+	SaveHumanoid(
+		humanoid
+	)
+
+
+	if
+		Config.Player.WalkSpeedEnabled
+	then
+
+		humanoid.WalkSpeed =
+			Config.Player.WalkSpeed
+	end
+
+
+	if Config.Player.JumpEnabled then
+
+		humanoid.UseJumpPower =
+			false
+
+
+		humanoid.JumpHeight =
+			Config.Player.JumpHeight
+	end
+end
+
+
+local function RestoreWalkSpeed()
+
+	local humanoid =
+		GetHumanoid()
+
+
+	if not humanoid then
+		return
+	end
+
+
+	local state =
+		OriginalHumanoid[
+			humanoid
+		]
+
+
+	if state then
+
+		humanoid.WalkSpeed =
+			state.WalkSpeed
+	end
+end
+
+
+local function RestoreJump()
+
+	local humanoid =
+		GetHumanoid()
+
+
+	if not humanoid then
+		return
+	end
+
+
+	local state =
+		OriginalHumanoid[
+			humanoid
+		]
+
+
+	if state then
+
+		humanoid.UseJumpPower =
+			state.UseJumpPower
+
+
+		humanoid.JumpHeight =
+			state.JumpHeight
+	end
+end
+
+
+--========================================================
+-- UI
+--========================================================
+
+local Window =
+	Rayfield:CreateWindow({
+
+		Name =
+			"Scream And Rune",
+
+		LoadingTitle =
+			"Scream And Rune",
+
+		LoadingSubtitle =
+			"ScriptsRBX.Com",
+
+		Theme =
+			"Default",
+
+		ToggleUIKeybind =
+			"K",
+
+		ConfigurationSaving = {
+			Enabled = false,
+		},
+
+		Discord = {
+			Enabled = false,
+		},
+
+		KeySystem =
+			false,
+	})
+
+
+--========================================================
+-- ESP TAB
+--========================================================
+
+local ESPTab =
+	Window:CreateTab(
+		"ESP",
+		"eye"
+	)
+
+
+ESPTab:CreateSection(
+	"Monster ESP"
+)
+
+
+ESPTab:CreateToggle({
+
+	Name =
+		"Monster Highlight",
+
+	CurrentValue =
+		false,
+
+	Callback = function(value)
+
+		Config.ESP.MonsterHighlight =
+			value
+	end,
+})
+
+
+ESPTab:CreateToggle({
+
+	Name =
+		"Monster Distance",
+
+	CurrentValue =
+		false,
+
+	Callback = function(value)
+
+		Config.ESP.MonsterDistance =
+			value
+	end,
+})
+
+
+ESPTab:CreateToggle({
+
+	Name =
+		"Monster Box",
+
+	CurrentValue =
+		false,
+
+	Callback = function(value)
+
+		Config.ESP.MonsterBox =
+			value
+	end,
+})
+
+
+ESPTab:CreateSection(
+	"Lock ESP"
+)
+
+
+ESPTab:CreateToggle({
+
+	Name =
+		"Lock ESP",
+
+	CurrentValue =
+		false,
+
+	Callback = function(value)
+
+		Config.ESP.LockESP =
+			value
+	end,
+})
+
+
+ESPTab:CreateButton({
+
+	Name =
+		"Teleport To Nearest Lock",
+
+	Callback = function()
+
+		local target =
+			FindNearestLock()
+
+
+		if target then
+
+			TeleportToLock(
+				target
+			)
+		end
+	end,
+})
+
+
+ESPTab:CreateButton({
+
+	Name =
+		"Teleport To Safest Lock",
+
+	Callback = function()
+
+		local target =
+			FindSafestLock()
+
+
+		if target then
+
+			TeleportToLock(
+				target
+			)
+		end
+	end,
+})
+
+
+--========================================================
+-- AUTO MATCH TAB
+--========================================================
+
+local AutoTab =
+	Window:CreateTab(
+		"Auto Match",
+		"zap"
+	)
+
+
+AutoTab:CreateSection(
+	"Win"
+)
+
+
+AutoTab:CreateButton({
+
+	Name =
+		"INSTA WIN",
+
+	Callback = function()
+
+		task.spawn(
+			InstaWin
+		)
+	end,
+})
+
+
+AutoTab:CreateSection(
+	"Interaction"
+)
+
+
+AutoTab:CreateToggle({
+
+	Name =
+		"Instant Proximity Prompts",
+
+	CurrentValue =
+		false,
+
+	Callback = function(value)
+
+		SetInstantPrompts(
+			value
+		)
+	end,
+})
+
+
+AutoTab:CreateToggle({
+
+	Name =
+		"Auto Search Backpacks",
+
+	CurrentValue =
+		false,
+
+	Callback = function(value)
+
+		Config.Auto.SearchBackpacks =
+			value
+
+
+		if value then
+
+			task.spawn(
+				AutoSearchBackpacks
+			)
+		end
+	end,
+})
+
+
+AutoTab:CreateToggle({
+
+	Name =
+		"Auto Safety",
+
+	CurrentValue =
+		false,
+
+	Callback = function(value)
+
+		Config.Auto.AutoSafety =
+			value
+
+
+		if value then
+
+			local root =
+				GetRoot()
+
+
+			if root then
+
+				local distance =
+					DistanceFromClosestMonster(
+						root.Position
+					)
+
+
+				if
+					distance
+					>= Config.Safety.DangerDistance
+				then
+
+					LastSafeCFrame =
+						root.CFrame
+				end
+			end
+		end
+	end,
+})
+
+
+AutoTab:CreateToggle({
+
+	Name =
+		"Fullbright / Clear Darkness",
+
+	CurrentValue =
+		false,
+
+	Callback = function(value)
+
+		SetFullbright(
+			value
+		)
+	end,
+})
+
+
+--========================================================
+-- PLAYER MODS TAB
+--========================================================
+
+local PlayerTab =
+	Window:CreateTab(
+		"Player Mods",
+		"person-standing"
+	)
+
+
+PlayerTab:CreateSection(
+	"Movement"
+)
+
+
+PlayerTab:CreateToggle({
+
+	Name =
+		"Custom WalkSpeed",
+
+	CurrentValue =
+		false,
+
+	Callback = function(value)
+
+		Config.Player.WalkSpeedEnabled =
+			value
+
+
+		if not value then
+
+			RestoreWalkSpeed()
+		end
+	end,
+})
+
+
+PlayerTab:CreateSlider({
+
+	Name =
+		"WalkSpeed",
+
+	Range =
+		{8, 100},
+
+	Increment =
+		1,
+
+	CurrentValue =
+		Config.Player.WalkSpeed,
+
+	Callback = function(value)
+
+		Config.Player.WalkSpeed =
+			value
+	end,
+})
+
+
+PlayerTab:CreateToggle({
+
+	Name =
+		"Custom Jump Height",
+
+	CurrentValue =
+		false,
+
+	Callback = function(value)
+
+		Config.Player.JumpEnabled =
+			value
+
+
+		if not value then
+
+			RestoreJump()
+		end
+	end,
+})
+
+
+PlayerTab:CreateSlider({
+
+	Name =
+		"Jump Height",
+
+	Range =
+		{4, 50},
+
+	Increment =
+		1,
+
+	CurrentValue =
+		Config.Player.JumpHeight,
+
+	Callback = function(value)
+
+		Config.Player.JumpHeight =
+			value
+	end,
+})
+
+
+--========================================================
+-- INITIAL SCANS
+--========================================================
+
+for _, monster in ipairs(
+	GetMonsters()
+) do
+
+	CreateMonsterESP(
+		monster
+	)
+end
+
+
+ScanLocks()
+
+
+--========================================================
+-- INITIAL SAFE POSITION
+--========================================================
+
+task.delay(
+	0.5,
+
+	function()
+
+		local root =
+			GetRoot()
+
+
+		if root then
+
+			local distance =
+				DistanceFromClosestMonster(
+					root.Position
+				)
+
+
+			if
+				distance
+				>= Config.Safety.DangerDistance
+			then
+
+				LastSafeCFrame =
+					root.CFrame
+			end
+		end
+	end
+)
+
+
+--========================================================
+-- UPDATE LOOP
+--========================================================
+
+local LastScan =
+	0
+
+
+RunService.RenderStepped:Connect(
+	function()
+
+		local now =
+			os.clock()
+
+
+		if now - LastScan >= 0.5 then
+
+			LastScan =
+				now
+
+
+			for _, monster in ipairs(
+				GetMonsters()
+			) do
+
+				CreateMonsterESP(
+					monster
+				)
+			end
+
+
+			ScanLocks()
+		end
+
+
+		UpdateMonsterESP()
+
+
+		UpdateLockESP()
+
+
+		AutoSafetyUpdate()
+
+
+		ApplyPlayerMods()
+	end
+)
+
+
+--========================================================
+-- LOADED
+--========================================================
+
+Rayfield:Notify({
+
+	Title =
+		"Scream And Rune",
+
+	Content =
+		"Clean build + Insta Win loaded.",
+
+	Duration =
+		4,
+})
