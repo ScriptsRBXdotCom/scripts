@@ -1,0 +1,891 @@
+--//========================================================
+--// Services
+--//========================================================
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+local Events = ReplicatedStorage:WaitForChild("Events")
+
+local RequestHatch = Events:FindFirstChild("RequestHatch")
+
+--//========================================================
+--// Rayfield Gen2
+--//========================================================
+
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
+
+local Window = Rayfield:CreateWindow({
+    name = "Egg Hub",
+    subtitle = "Rayfield Gen2",
+
+    configuration = {
+        autoSave = true,
+        autoLoad = true,
+        fileName = "EggHubGen2"
+    }
+})
+
+--//========================================================
+--// Notifications
+--//========================================================
+
+local function notify(title, content)
+    Window:Notify({
+        title = title,
+        content = content
+    })
+end
+
+--//========================================================
+--// Character Utilities
+--//========================================================
+
+local function getCharacter()
+    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+end
+
+local function getRoot()
+    local character = getCharacter()
+
+    return character:FindFirstChild("HumanoidRootPart")
+        or character:WaitForChild("HumanoidRootPart", 5)
+end
+
+local function getPosition(target)
+    if not target then
+        return nil
+    end
+
+    if target:IsA("BasePart") then
+        return target.Position
+    end
+
+    if target:IsA("Model") then
+        return target:GetPivot().Position
+    end
+
+    local part = target:FindFirstChildWhichIsA("BasePart", true)
+
+    if part then
+        return part.Position
+    end
+
+    return nil
+end
+
+local function teleportTo(target, yOffset)
+    local root = getRoot()
+
+    if not root or not target then
+        return false
+    end
+
+    yOffset = yOffset or 5
+
+    local targetCFrame
+
+    if target:IsA("BasePart") then
+        targetCFrame = target.CFrame
+
+    elseif target:IsA("Model") then
+        targetCFrame = target:GetPivot()
+
+    else
+        local part = target:FindFirstChildWhichIsA("BasePart", true)
+
+        if part then
+            targetCFrame = part.CFrame
+        end
+    end
+
+    if not targetCFrame then
+        return false
+    end
+
+    root.CFrame = targetCFrame * CFrame.new(0, yOffset, 0)
+
+    return true
+end
+
+--//========================================================
+--// Plot Utilities
+--//========================================================
+
+local function getPlotIndex()
+    return LocalPlayer:GetAttribute("PlotIndex")
+end
+
+local function getNumberedPlot()
+    local plots = Workspace:FindFirstChild("Plots")
+    local index = getPlotIndex()
+
+    if not plots or index == nil then
+        return nil
+    end
+
+    return plots:FindFirstChild(tostring(index))
+end
+
+local function getOwnedEggPlot()
+    return Workspace:FindFirstChild(
+        "Plot_" .. LocalPlayer.Name
+    )
+end
+
+local function getEggHatchFolder()
+    local plot = getOwnedEggPlot()
+
+    if not plot then
+        return nil
+    end
+
+    return plot:FindFirstChild("EggHatch")
+end
+
+--//========================================================
+--// Egg Hatching
+--//========================================================
+
+local function isEggReady(egg)
+    if not egg
+        or not egg:IsA("Model")
+        or egg:GetAttribute("IsEgg") ~= true then
+
+        return false
+    end
+
+    local now = Workspace:GetServerTimeNow()
+
+    local readyAt = egg:GetAttribute("ReadyAt")
+
+    if typeof(readyAt) == "number" then
+        return now >= readyAt
+    end
+
+    local hatchStart = egg:GetAttribute("HatchStartTime")
+    local hatchTime = egg:GetAttribute("HatchTime")
+
+    if typeof(hatchStart) == "number"
+        and typeof(hatchTime) == "number" then
+
+        return now >= (hatchStart + hatchTime)
+    end
+
+    return false
+end
+
+local function hatchEgg(egg)
+    if not RequestHatch then
+        RequestHatch = Events:FindFirstChild("RequestHatch")
+    end
+
+    if not RequestHatch then
+        return false
+    end
+
+    if not egg or not egg.Parent then
+        return false
+    end
+
+    RequestHatch:FireServer(egg)
+
+    return true
+end
+
+local function hatchAllReady()
+    local eggHatch = getEggHatchFolder()
+
+    if not eggHatch then
+        return 0
+    end
+
+    local count = 0
+
+    for _, egg in ipairs(eggHatch:GetChildren()) do
+        if isEggReady(egg) then
+            if hatchEgg(egg) then
+                count += 1
+                task.wait(0.15)
+            end
+        end
+    end
+
+    return count
+end
+
+--//========================================================
+--// Auto Hatch
+--//========================================================
+
+local AutoHatch = false
+local AutoHatchThread = nil
+
+local function startAutoHatch()
+    if AutoHatchThread then
+        return
+    end
+
+    AutoHatchThread = task.spawn(function()
+        while AutoHatch do
+            local eggHatch = getEggHatchFolder()
+
+            if eggHatch then
+                for _, egg in ipairs(eggHatch:GetChildren()) do
+                    if not AutoHatch then
+                        break
+                    end
+
+                    if isEggReady(egg) then
+                        hatchEgg(egg)
+                        task.wait(0.2)
+                    end
+                end
+            end
+
+            task.wait(0.5)
+        end
+
+        AutoHatchThread = nil
+    end)
+end
+
+--//========================================================
+--// Zone / Egg Nest Utilities
+--//========================================================
+
+local EggsFolder = Workspace:WaitForChild("Eggs")
+
+local function extractZoneNumber(name)
+    return tonumber(
+        string.match(name, "^Zone(%d+)$")
+    )
+end
+
+local function getZones()
+    local zones = {}
+
+    for _, child in ipairs(EggsFolder:GetChildren()) do
+        local number = extractZoneNumber(child.Name)
+
+        if number then
+            table.insert(zones, {
+                Number = number,
+                Object = child
+            })
+        end
+    end
+
+    table.sort(zones, function(a, b)
+        return a.Number < b.Number
+    end)
+
+    return zones
+end
+
+local function getZone(zoneNumber)
+    return EggsFolder:FindFirstChild(
+        "Zone" .. tostring(zoneNumber)
+    )
+end
+
+local function getEggNests(zoneNumber)
+    local zone = getZone(zoneNumber)
+
+    if not zone then
+        return {}
+    end
+
+    local nests = {}
+
+    for _, child in ipairs(zone:GetChildren()) do
+        if child.Name == "EggNest" then
+            table.insert(nests, child)
+        end
+    end
+
+    return nests
+end
+
+local function buildZoneOptions()
+    local options = {}
+
+    for _, zone in ipairs(getZones()) do
+        table.insert(
+            options,
+            "Zone " .. tostring(zone.Number)
+        )
+    end
+
+    if #options == 0 then
+        table.insert(options, "No Zones Found")
+    end
+
+    return options
+end
+
+local function buildNestOptions(zoneNumber)
+    local nests = getEggNests(zoneNumber)
+    local options = {}
+
+    for i = 1, #nests do
+        table.insert(
+            options,
+            "Egg Nest #" .. tostring(i)
+        )
+    end
+
+    if #options == 0 then
+        table.insert(options, "No Egg Nests Found")
+    end
+
+    return options
+end
+
+--//========================================================
+--// Zone Teleport
+--//========================================================
+
+local function teleportToZone(zoneNumber)
+    local zone = getZone(zoneNumber)
+
+    if not zone then
+        notify(
+            "Zones",
+            "Zone " .. tostring(zoneNumber) .. " was not found."
+        )
+        return
+    end
+
+    local nests = getEggNests(zoneNumber)
+
+    -- Prefer the first egg nest as the zone destination
+    if #nests > 0 then
+        if teleportTo(nests[1], 5) then
+            notify(
+                "Zones",
+                "Teleported to Zone " .. tostring(zoneNumber)
+            )
+        end
+
+        return
+    end
+
+    -- Otherwise try the zone container itself
+    if teleportTo(zone, 5) then
+        notify(
+            "Zones",
+            "Teleported to Zone " .. tostring(zoneNumber)
+        )
+    else
+        notify(
+            "Zones",
+            "Couldn't find a teleportable object in Zone "
+                .. tostring(zoneNumber)
+        )
+    end
+end
+
+local function teleportToNest(zoneNumber, nestIndex)
+    local nests = getEggNests(zoneNumber)
+    local nest = nests[nestIndex]
+
+    if not nest then
+        notify(
+            "Egg Nests",
+            "Egg Nest #" .. tostring(nestIndex)
+                .. " was not found in Zone "
+                .. tostring(zoneNumber)
+        )
+
+        return false
+    end
+
+    if teleportTo(nest, 4) then
+        notify(
+            "Egg Nests",
+            "Zone "
+                .. tostring(zoneNumber)
+                .. " • Egg Nest #"
+                .. tostring(nestIndex)
+        )
+
+        return true
+    end
+
+    notify(
+        "Egg Nests",
+        "Couldn't teleport to this egg nest."
+    )
+
+    return false
+end
+
+--//========================================================
+--// Tabs
+--//========================================================
+
+local EggsTab = Window:CreateTab({
+    name = "Eggs"
+})
+
+local TeleportTab = Window:CreateTab({
+    name = "Teleports"
+})
+
+--//========================================================
+--// Eggs Tab
+--//========================================================
+
+EggsTab:CreateSection({
+    name = "Egg Management"
+})
+
+EggsTab:CreateButton({
+    name = "Hatch All Ready Eggs",
+
+    description = "Hatches every egg that is currently ready.",
+
+    callback = function()
+        local count = hatchAllReady()
+
+        notify(
+            "Eggs",
+            "Requested "
+                .. tostring(count)
+                .. " ready egg(s)."
+        )
+    end
+})
+
+EggsTab:CreateToggle({
+    name = "Auto Hatch Ready Eggs",
+
+    description = "Automatically hatches eggs as they become ready.",
+
+    flag = "AutoHatchReady",
+
+    value = false,
+
+    callback = function(value)
+        AutoHatch = value
+
+        if value then
+            startAutoHatch()
+
+            notify(
+                "Auto Hatch",
+                "Enabled"
+            )
+        else
+            notify(
+                "Auto Hatch",
+                "Disabled"
+            )
+        end
+    end
+})
+
+EggsTab:CreateButton({
+    name = "Teleport to Egg Hatch",
+
+    description = "Teleports to your personal EggHatch area.",
+
+    callback = function()
+        local eggHatch = getEggHatchFolder()
+
+        if not eggHatch then
+            notify(
+                "Eggs",
+                "Your EggHatch wasn't found."
+            )
+
+            return
+        end
+
+        if teleportTo(eggHatch, 5) then
+            notify(
+                "Eggs",
+                "Teleported to EggHatch."
+            )
+        end
+    end
+})
+
+--//========================================================
+--// Teleport Tab - Plot
+--//========================================================
+
+TeleportTab:CreateSection({
+    name = "Your Plot"
+})
+
+TeleportTab:CreateButton({
+    name = "Teleport to My Plot",
+
+    description = "Automatically uses your PlotIndex.",
+
+    callback = function()
+        local index = getPlotIndex()
+        local plot = getNumberedPlot()
+
+        if not plot then
+            notify(
+                "Plot",
+                "Couldn't find Plot "
+                    .. tostring(index)
+            )
+
+            return
+        end
+
+        if teleportTo(plot, 5) then
+            notify(
+                "Plot",
+                "Teleported to Plot "
+                    .. tostring(index)
+            )
+        end
+    end
+})
+
+--//========================================================
+--// Teleport Tab - Zone Selection
+--//========================================================
+
+TeleportTab:CreateSection({
+    name = "Zones"
+})
+
+local zones = getZones()
+
+local SelectedZone =
+    zones[1]
+    and zones[1].Number
+    or 1
+
+local SelectedNest = 1
+
+local ZoneDropdown
+local NestDropdown
+
+ZoneDropdown = TeleportTab:CreateDropdown({
+    name = "Select Zone",
+
+    description = "Choose the zone you want to visit.",
+
+    options = buildZoneOptions(),
+
+    value = "Zone " .. tostring(SelectedZone),
+
+    flag = "SelectedZone",
+
+    callback = function(selected)
+        if typeof(selected) ~= "string" then
+            return
+        end
+
+        local number = tonumber(
+            selected:match("%d+")
+        )
+
+        if not number then
+            return
+        end
+
+        SelectedZone = number
+        SelectedNest = 1
+
+        if NestDropdown then
+            local options =
+                buildNestOptions(SelectedZone)
+
+            NestDropdown:Refresh(options)
+
+            if options[1]
+                and options[1] ~= "No Egg Nests Found" then
+
+                NestDropdown:Set(
+                    options[1],
+                    true
+                )
+            end
+        end
+    end
+})
+
+TeleportTab:CreateButton({
+    name = "Teleport to Selected Zone",
+
+    description = "Teleports to the currently selected zone.",
+
+    callback = function()
+        teleportToZone(SelectedZone)
+    end
+})
+
+--//========================================================
+--// Teleport Tab - Eggs In Selected Zone
+--//========================================================
+
+TeleportTab:CreateSection({
+    name = "Eggs In Selected Zone"
+})
+
+NestDropdown = TeleportTab:CreateDropdown({
+    name = "Select Egg Nest",
+
+    description = "Choose an egg nest inside the selected zone.",
+
+    options = buildNestOptions(SelectedZone),
+
+    value = "Egg Nest #1",
+
+    flag = "SelectedEggNest",
+
+    callback = function(selected)
+        if typeof(selected) ~= "string" then
+            return
+        end
+
+        local number = tonumber(
+            selected:match("%d+")
+        )
+
+        if number then
+            SelectedNest = number
+        end
+    end
+})
+
+TeleportTab:CreateButton({
+    name = "Teleport to Selected Egg",
+
+    description = "Teleports to the selected egg nest.",
+
+    callback = function()
+        teleportToNest(
+            SelectedZone,
+            SelectedNest
+        )
+    end
+})
+
+TeleportTab:CreateButton({
+    name = "Nearest Egg in Selected Zone",
+
+    description = "Teleports to the closest egg nest in this zone.",
+
+    callback = function()
+        local root = getRoot()
+
+        if not root then
+            return
+        end
+
+        local nests = getEggNests(SelectedZone)
+
+        if #nests == 0 then
+            notify(
+                "Egg Nests",
+                "No egg nests found in Zone "
+                    .. tostring(SelectedZone)
+            )
+
+            return
+        end
+
+        local nearest
+        local nearestIndex
+        local nearestDistance = math.huge
+
+        for index, nest in ipairs(nests) do
+            local position = getPosition(nest)
+
+            if position then
+                local distance =
+                    (root.Position - position).Magnitude
+
+                if distance < nearestDistance then
+                    nearestDistance = distance
+                    nearest = nest
+                    nearestIndex = index
+                end
+            end
+        end
+
+        if nearest then
+            SelectedNest = nearestIndex
+
+            if NestDropdown then
+                NestDropdown:Set(
+                    "Egg Nest #" .. tostring(nearestIndex),
+                    true
+                )
+            end
+
+            teleportTo(nearest, 4)
+
+            notify(
+                "Egg Nests",
+                "Zone "
+                    .. tostring(SelectedZone)
+                    .. " • Egg Nest #"
+                    .. tostring(nearestIndex)
+            )
+        end
+    end
+})
+
+--//========================================================
+--// Egg Navigation
+--//========================================================
+
+TeleportTab:CreateSection({
+    name = "Egg Navigation"
+})
+
+TeleportTab:CreateButton({
+    name = "Previous Egg",
+
+    description = "Moves to the previous egg nest in this zone.",
+
+    callback = function()
+        local nests = getEggNests(SelectedZone)
+
+        if #nests == 0 then
+            notify(
+                "Egg Nests",
+                "No egg nests found in Zone "
+                    .. tostring(SelectedZone)
+            )
+
+            return
+        end
+
+        SelectedNest -= 1
+
+        if SelectedNest < 1 then
+            SelectedNest = #nests
+        end
+
+        if NestDropdown then
+            NestDropdown:Set(
+                "Egg Nest #" .. tostring(SelectedNest),
+                true
+            )
+        end
+
+        teleportToNest(
+            SelectedZone,
+            SelectedNest
+        )
+    end
+})
+
+TeleportTab:CreateButton({
+    name = "Next Egg",
+
+    description = "Moves to the next egg nest in this zone.",
+
+    callback = function()
+        local nests = getEggNests(SelectedZone)
+
+        if #nests == 0 then
+            notify(
+                "Egg Nests",
+                "No egg nests found in Zone "
+                    .. tostring(SelectedZone)
+            )
+
+            return
+        end
+
+        SelectedNest += 1
+
+        if SelectedNest > #nests then
+            SelectedNest = 1
+        end
+
+        if NestDropdown then
+            NestDropdown:Set(
+                "Egg Nest #" .. tostring(SelectedNest),
+                true
+            )
+        end
+
+        teleportToNest(
+            SelectedZone,
+            SelectedNest
+        )
+    end
+})
+
+--//========================================================
+--// Refresh
+--//========================================================
+
+TeleportTab:CreateSection({
+    name = "Refresh"
+})
+
+TeleportTab:CreateButton({
+    name = "Refresh Zones & Eggs",
+
+    description = "Refreshes the zone and egg lists if the map changes.",
+
+    callback = function()
+        local zoneOptions = buildZoneOptions()
+
+        ZoneDropdown:Refresh(zoneOptions)
+
+        local currentZoneExists =
+            getZone(SelectedZone) ~= nil
+
+        if not currentZoneExists then
+            local currentZones = getZones()
+
+            if currentZones[1] then
+                SelectedZone =
+                    currentZones[1].Number
+            end
+        end
+
+        ZoneDropdown:Set(
+            "Zone " .. tostring(SelectedZone),
+            true
+        )
+
+        local nestOptions =
+            buildNestOptions(SelectedZone)
+
+        NestDropdown:Refresh(nestOptions)
+
+        SelectedNest = 1
+
+        if nestOptions[1]
+            and nestOptions[1] ~= "No Egg Nests Found" then
+
+            NestDropdown:Set(
+                nestOptions[1],
+                true
+            )
+        end
+
+        notify(
+            "Teleports",
+            "Zone and egg lists refreshed."
+        )
+    end
+})
+
+--//========================================================
+--// Loaded
+--//========================================================
+
+notify(
+    "Egg Hub",
+    "Loaded successfully."
+)
