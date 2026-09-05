@@ -1,0 +1,1150 @@
+--========================================================
+-- FRUIT AUTOMATION
+-- Client / exploit testing
+--
+-- Features:
+--   Auto Detect Plot
+--   Auto Collect Fruit
+--   Auto Collect Cash
+--   Auto Blend
+--   Auto Deposit Gems
+--   Auto Upgrade Sell
+--   Auto Buy 1 / 5 / 25 / 100
+--   Auto Fruit Slice
+--   Auto Mega Fruit
+--   Auto Start / Claim
+--
+-- Rayfield Gen2
+--========================================================
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local LocalPlayer = Players.LocalPlayer
+
+--========================================================
+-- RAYFIELD
+--========================================================
+
+local Rayfield = loadstring(
+	game:HttpGet("https://sirius.menu/gen2")
+)()
+
+local Window = Rayfield:CreateWindow({
+	name = "Fruit Automation",
+	subtitle = "Client Testing",
+	theme = "amethyst",
+})
+
+local FarmTab = Window:CreateTab({
+	name = "Automation"
+})
+
+local SliceTab = Window:CreateTab({
+	name = "Fruit Slice"
+})
+
+local SettingsTab = Window:CreateTab({
+	name = "Settings"
+})
+
+--========================================================
+-- CONFIG
+--========================================================
+
+local Config = {
+
+	-- Fruit
+	AutoCollectFruit = false,
+
+	-- Plot
+	AutoCash = false,
+	AutoBlend = false,
+	AutoDepositGems = false,
+	AutoUpgradeSell = false,
+
+	-- Buying
+	AutoBuy1 = false,
+	AutoBuy5 = false,
+	AutoBuy25 = false,
+	AutoBuy100 = false,
+
+	-- Fruit Slice
+	AutoSlice = false,
+	AutoMega = false,
+	AutoStart = false,
+	AutoClaim = false,
+
+	-- Speed
+	TouchDelay = 0.08,
+	FruitDelay = 0.05,
+	SliceDelay = 0.03,
+}
+
+--========================================================
+-- CHARACTER
+--========================================================
+
+local function getRoot()
+
+	local character = LocalPlayer.Character
+
+	if not character then
+		return nil
+	end
+
+	return character:FindFirstChild(
+		"HumanoidRootPart"
+	)
+
+end
+
+--========================================================
+-- AUTO DETECT PLAYER PLOT
+--========================================================
+
+local CurrentPlot = nil
+
+local function findMyPlot()
+
+	local plots = workspace:FindFirstChild(
+		"Plots"
+	)
+
+	if not plots then
+		CurrentPlot = nil
+		return nil
+	end
+
+	for _, plot in ipairs(
+		plots:GetChildren()
+	) do
+
+		local ownerId =
+			plot:GetAttribute(
+				"OwnerUserId"
+			)
+
+		if ownerId ==
+			LocalPlayer.UserId then
+
+			CurrentPlot = plot
+
+			return plot
+		end
+
+	end
+
+	CurrentPlot = nil
+
+	return nil
+end
+
+local function getPlot()
+
+	if CurrentPlot
+		and CurrentPlot.Parent
+		and CurrentPlot:GetAttribute(
+			"OwnerUserId"
+		) == LocalPlayer.UserId then
+
+		return CurrentPlot
+	end
+
+	return findMyPlot()
+end
+
+findMyPlot()
+
+-- Keep plot updated if player is
+-- assigned a different one.
+task.spawn(function()
+
+	while task.wait(1) do
+		findMyPlot()
+	end
+
+end)
+
+--========================================================
+-- BUTTON SYSTEM
+--========================================================
+
+local function getButton(buttonName)
+
+	local plot = getPlot()
+
+	if not plot then
+		return nil
+	end
+
+	local buttons =
+		plot:FindFirstChild(
+			"Buttons"
+		)
+
+	if not buttons then
+		return nil
+	end
+
+	local holder =
+		buttons:FindFirstChild(
+			buttonName
+		)
+
+	if not holder then
+		return nil
+	end
+
+	local button =
+		holder:FindFirstChild(
+			"Button"
+		)
+
+	if button and button:IsA(
+		"BasePart"
+	) then
+
+		return button
+	end
+
+	return nil
+end
+
+local function touchButton(
+	buttonName
+)
+
+	local root = getRoot()
+
+	local button =
+		getButton(buttonName)
+
+	if not root or not button then
+		return
+	end
+
+	pcall(function()
+
+		firetouchinterest(
+			root,
+			button,
+			0
+		)
+
+		task.wait()
+
+		firetouchinterest(
+			root,
+			button,
+			1
+		)
+
+	end)
+
+end
+
+--========================================================
+-- AUTO COLLECT FRUIT
+--========================================================
+
+local FruitDrops =
+	workspace:WaitForChild(
+		"FruitDrops"
+	)
+
+local CollectRequest =
+	ReplicatedStorage
+		:WaitForChild("Remotes")
+		:WaitForChild(
+			"CollectRequest"
+		)
+
+local collectingFruit = {}
+
+local function collectFruit(fruit)
+
+	if not Config.AutoCollectFruit then
+		return
+	end
+
+	if not fruit then
+		return
+	end
+
+	if not fruit:IsA("Model") then
+		return
+	end
+
+	if fruit.Parent ~= FruitDrops then
+		return
+	end
+
+	if collectingFruit[fruit] then
+		return
+	end
+
+	if fruit:GetAttribute(
+		"Collected"
+	) then
+		return
+	end
+
+	-- Only touch fruit belonging to us
+	local owner =
+		fruit:GetAttribute(
+			"Owner"
+		)
+
+	if owner == nil then
+		return
+	end
+
+	if owner ~= LocalPlayer.UserId then
+		return
+	end
+
+	local root = getRoot()
+
+	if not root then
+		return
+	end
+
+	collectingFruit[fruit] = true
+
+	task.spawn(function()
+
+		if not fruit.Parent then
+			collectingFruit[fruit] = nil
+			return
+		end
+
+		-- Move the fruit locally beside player.
+		-- This is the method you confirmed works.
+		pcall(function()
+
+			fruit:PivotTo(
+				root.CFrame
+				* CFrame.new(
+					0,
+					0,
+					-1
+				)
+			)
+
+		end)
+
+		task.wait(0.02)
+
+		if fruit.Parent
+			and not fruit:GetAttribute(
+				"Collected"
+			) then
+
+			pcall(function()
+
+				CollectRequest:FireServer(
+					fruit
+				)
+
+			end)
+
+		end
+
+		-- Very quick retry availability
+		task.delay(
+			0.05,
+			function()
+
+				collectingFruit[fruit] =
+					nil
+
+			end
+		)
+
+	end)
+
+end
+
+-- Existing fruits
+task.spawn(function()
+
+	while task.wait(
+		Config.FruitDelay
+	) do
+
+		if Config.AutoCollectFruit then
+
+			for _, fruit in ipairs(
+				FruitDrops:GetChildren()
+			) do
+
+				if not collectingFruit[
+					fruit
+				] then
+
+					task.spawn(
+						collectFruit,
+						fruit
+					)
+
+				end
+
+			end
+
+		end
+
+	end
+
+end)
+
+-- New fruits
+FruitDrops.ChildAdded:Connect(
+	function(fruit)
+
+		if not Config.AutoCollectFruit then
+			return
+		end
+
+		-- Owner can replicate shortly
+		-- after ChildAdded.
+		task.delay(
+			0.03,
+			function()
+
+				if fruit.Parent then
+					collectFruit(
+						fruit
+					)
+				end
+
+			end
+		)
+
+	end
+)
+
+FruitDrops.ChildRemoved:Connect(
+	function(fruit)
+
+		collectingFruit[fruit] = nil
+
+	end
+)
+
+--========================================================
+-- PLOT AUTOMATION LOOP
+--========================================================
+
+task.spawn(function()
+
+	while task.wait(
+		Config.TouchDelay
+	) do
+
+		if Config.AutoCash then
+
+			task.spawn(
+				touchButton,
+				"Collect"
+			)
+
+		end
+
+		if Config.AutoBlend then
+
+			task.spawn(
+				touchButton,
+				"Blend"
+			)
+
+		end
+
+		if Config.AutoDepositGems then
+
+			task.spawn(
+				touchButton,
+				"DepositGems"
+			)
+
+		end
+
+		if Config.AutoUpgradeSell then
+
+			task.spawn(
+				touchButton,
+				"Upgrade Sell"
+			)
+
+		end
+
+		if Config.AutoBuy1 then
+
+			task.spawn(
+				touchButton,
+				"Buy1"
+			)
+
+		end
+
+		if Config.AutoBuy5 then
+
+			task.spawn(
+				touchButton,
+				"Buy 5"
+			)
+
+		end
+
+		if Config.AutoBuy25 then
+
+			task.spawn(
+				touchButton,
+				"Buy25"
+			)
+
+		end
+
+		if Config.AutoBuy100 then
+
+			task.spawn(
+				touchButton,
+				"Buy100"
+			)
+
+		end
+
+	end
+
+end)
+
+--========================================================
+-- FRUIT SLICE REMOTES
+--========================================================
+
+local FruitSliceRemotes =
+	ReplicatedStorage:WaitForChild(
+		"FruitSliceRemotes"
+	)
+
+local StartMinigame =
+	FruitSliceRemotes:WaitForChild(
+		"StartMinigame"
+	)
+
+local SliceObject =
+	FruitSliceRemotes:WaitForChild(
+		"SliceObject"
+	)
+
+local MegaEvent =
+	FruitSliceRemotes:WaitForChild(
+		"MegaEvent"
+	)
+
+local MegaHit =
+	FruitSliceRemotes:WaitForChild(
+		"MegaHit"
+	)
+
+local GameOverChoice =
+	FruitSliceRemotes:WaitForChild(
+		"GameOverChoice"
+	)
+
+--========================================================
+-- FRUIT SLICE STATE
+--========================================================
+
+local SliceContainer = nil
+
+local sliced = {}
+
+local swipeId = 0
+
+local MegaActive = false
+
+--========================================================
+-- MINIGAME START
+--========================================================
+
+StartMinigame.OnClientEvent:Connect(
+	function(
+		cameraCFrame,
+		container,
+		fieldOfView,
+		showWindow,
+		arena
+	)
+
+		SliceContainer = container
+
+		table.clear(sliced)
+
+		if Config.AutoStart
+			and showWindow then
+
+			task.delay(
+				0.25,
+				function()
+
+					pcall(function()
+
+						GameOverChoice
+							:FireServer(
+								"start"
+							)
+
+					end)
+
+				end
+			)
+
+		end
+
+	end
+)
+
+--========================================================
+-- FIND ACTIVE SLICE CONTAINER
+--========================================================
+
+local function findSliceContainer()
+
+	if SliceContainer
+		and SliceContainer.Parent then
+
+		return SliceContainer
+	end
+
+	-- Fallback if script was executed
+	-- after round already started.
+	for _, object in ipairs(
+		workspace:GetDescendants()
+	) do
+
+		if object:GetAttribute(
+			"SliceObjectId"
+		) ~= nil then
+
+			SliceContainer =
+				object.Parent
+
+			return SliceContainer
+
+		end
+
+	end
+
+	return nil
+end
+
+--========================================================
+-- SLICE OBJECT
+--========================================================
+
+local function sliceFruitObject(
+	object
+)
+
+	if not Config.AutoSlice then
+		return
+	end
+
+	if not object
+		or not object.Parent then
+
+		return
+	end
+
+	local id =
+		object:GetAttribute(
+			"SliceObjectId"
+		)
+
+	if id == nil then
+		return
+	end
+
+	if sliced[id] then
+		return
+	end
+
+	local kind =
+		object:GetAttribute(
+			"SliceKind"
+		)
+
+	-- Avoid bombs
+	if kind == "Bomb" then
+		return
+	end
+
+	local success, position =
+		pcall(function()
+
+			return object:GetPivot()
+				.Position
+
+		end)
+
+	if not success then
+		return
+	end
+
+	sliced[id] = true
+
+	swipeId += 1
+
+	pcall(function()
+
+		SliceObject:FireServer(
+			id,
+			position,
+			swipeId
+		)
+
+	end)
+
+	-- If server left it alive,
+	-- allow retry.
+	task.delay(
+		0.2,
+		function()
+
+			if object
+				and object.Parent
+				and object:GetAttribute(
+					"SliceObjectId"
+				) == id then
+
+				sliced[id] = nil
+
+			end
+
+		end
+	)
+
+end
+
+--========================================================
+-- AUTO SLICE LOOP
+--========================================================
+
+task.spawn(function()
+
+	while task.wait(
+		Config.SliceDelay
+	) do
+
+		if Config.AutoSlice then
+
+			local container =
+				findSliceContainer()
+
+			if container then
+
+				for _, object in ipairs(
+					container:GetChildren()
+				) do
+
+					if object:GetAttribute(
+						"SliceObjectId"
+					) ~= nil
+						and object:GetAttribute(
+							"SliceKind"
+						) ~= "Bomb" then
+
+						task.spawn(
+							sliceFruitObject,
+							object
+						)
+
+					end
+
+				end
+
+			end
+
+		end
+
+	end
+
+end)
+
+--========================================================
+-- MEGA FRUIT
+--========================================================
+
+local megaThreadRunning = false
+
+local function startMegaSpam()
+
+	if megaThreadRunning then
+		return
+	end
+
+	megaThreadRunning = true
+
+	task.spawn(function()
+
+		while MegaActive
+			and Config.AutoMega do
+
+			pcall(function()
+
+				MegaHit:FireServer()
+
+			end)
+
+			task.wait(0.04)
+
+		end
+
+		megaThreadRunning = false
+
+	end)
+
+end
+
+MegaEvent.OnClientEvent:Connect(
+	function(action, data)
+
+		if action == "start" then
+
+			MegaActive = true
+
+			if Config.AutoMega then
+
+				startMegaSpam()
+
+			end
+
+		elseif action == "end" then
+
+			MegaActive = false
+
+		end
+
+	end
+)
+
+--========================================================
+-- AUTO CLAIM
+--========================================================
+
+task.spawn(function()
+
+	while task.wait(0.25) do
+
+		if Config.AutoClaim then
+
+			local PlayerGui =
+				LocalPlayer:FindFirstChild(
+					"PlayerGui"
+				)
+
+			local loss =
+				PlayerGui
+				and PlayerGui
+					:FindFirstChild(
+						"Window_MiniGameLoss"
+					)
+
+			if loss and loss.Enabled then
+
+				pcall(function()
+
+					GameOverChoice
+						:FireServer(
+							"claim"
+						)
+
+				end)
+
+				task.wait(0.75)
+
+			end
+
+		end
+
+	end
+
+end)
+
+--========================================================
+-- AUTOMATION UI
+--========================================================
+
+FarmTab:CreateToggle({
+	name = "Auto Collect Fruit",
+
+	callback = function(value)
+
+		Config.AutoCollectFruit =
+			value
+
+		if value then
+
+			table.clear(
+				collectingFruit
+			)
+
+		end
+
+	end,
+})
+
+FarmTab:CreateToggle({
+	name = "Auto Collect Cash",
+
+	callback = function(value)
+
+		Config.AutoCash = value
+
+	end,
+})
+
+FarmTab:CreateToggle({
+	name = "Auto Blend Fruit",
+
+	callback = function(value)
+
+		Config.AutoBlend = value
+
+	end,
+})
+
+FarmTab:CreateToggle({
+	name = "Auto Deposit Gems",
+
+	callback = function(value)
+
+		Config.AutoDepositGems =
+			value
+
+	end,
+})
+
+FarmTab:CreateToggle({
+	name = "Auto Upgrade Sell",
+
+	callback = function(value)
+
+		Config.AutoUpgradeSell =
+			value
+
+	end,
+})
+
+FarmTab:CreateToggle({
+	name = "Auto Buy 1",
+
+	callback = function(value)
+
+		Config.AutoBuy1 = value
+
+	end,
+})
+
+FarmTab:CreateToggle({
+	name = "Auto Buy 5",
+
+	callback = function(value)
+
+		Config.AutoBuy5 = value
+
+	end,
+})
+
+FarmTab:CreateToggle({
+	name = "Auto Buy 25",
+
+	callback = function(value)
+
+		Config.AutoBuy25 = value
+
+	end,
+})
+
+FarmTab:CreateToggle({
+	name = "Auto Buy 100",
+
+	callback = function(value)
+
+		Config.AutoBuy100 = value
+
+	end,
+})
+
+--========================================================
+-- FRUIT SLICE UI
+--========================================================
+
+SliceTab:CreateToggle({
+	name = "Auto Slice Fruit",
+
+	callback = function(value)
+
+		Config.AutoSlice = value
+
+		if value then
+			table.clear(sliced)
+		end
+
+	end,
+})
+
+SliceTab:CreateToggle({
+	name = "Auto Hit Mega Fruit",
+
+	callback = function(value)
+
+		Config.AutoMega = value
+
+		if value
+			and MegaActive then
+
+			startMegaSpam()
+
+		end
+
+	end,
+})
+
+SliceTab:CreateToggle({
+	name = "Auto Start Round",
+
+	callback = function(value)
+
+		Config.AutoStart = value
+
+	end,
+})
+
+SliceTab:CreateToggle({
+	name = "Auto Claim",
+
+	callback = function(value)
+
+		Config.AutoClaim = value
+
+	end,
+})
+
+--========================================================
+-- SETTINGS UI
+--========================================================
+
+SettingsTab:CreateButton({
+	name = "Detect My Plot",
+
+	callback = function()
+
+		local plot =
+			findMyPlot()
+
+		if plot then
+
+			print(
+				"[Fruit Automation] My plot:",
+				plot:GetFullName()
+			)
+
+			print(
+				"[Fruit Automation] OwnerUserId:",
+				plot:GetAttribute(
+					"OwnerUserId"
+				)
+			)
+
+		else
+
+			warn(
+				"[Fruit Automation] No plot found for:",
+				LocalPlayer.UserId
+			)
+
+		end
+
+	end,
+})
+
+SettingsTab:CreateButton({
+	name = "Theme: Ember",
+
+	callback = function()
+
+		Window:ChangeTheme(
+			"ember"
+		)
+
+	end,
+})
+
+SettingsTab:CreateButton({
+	name = "Theme: Frost",
+
+	callback = function()
+
+		Window:ChangeTheme(
+			"frost"
+		)
+
+	end,
+})
+
+SettingsTab:CreateButton({
+	name = "Theme: Rose",
+
+	callback = function()
+
+		Window:ChangeTheme(
+			"rose"
+		)
+
+	end,
+})
+
+SettingsTab:CreateButton({
+	name = "Theme: Amethyst",
+
+	callback = function()
+
+		Window:ChangeTheme(
+			"amethyst"
+		)
+
+	end,
+})
+
+--========================================================
+-- LOADED
+--========================================================
+
+print(
+	"[Fruit Automation] Loaded"
+)
+
+print(
+	"[Fruit Automation] UserId:",
+	LocalPlayer.UserId
+)
+
+local detectedPlot =
+	getPlot()
+
+if detectedPlot then
+
+	print(
+		"[Fruit Automation] Plot:",
+		detectedPlot.Name
+	)
+
+else
+
+	warn(
+		"[Fruit Automation] Waiting for owned plot..."
+	)
+
+end
