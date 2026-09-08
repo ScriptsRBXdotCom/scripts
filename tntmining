@@ -1,0 +1,3060 @@
+--========================================================
+-- SERVICES
+--========================================================
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Player = Players.LocalPlayer
+
+local ClientAction = ReplicatedStorage
+	:WaitForChild("Logic")
+	:WaitForChild("Network")
+	:WaitForChild("Remotes")
+	:WaitForChild("ClientAction")
+
+local ActiveBombsFolder = workspace:WaitForChild("ActiveBombs")
+
+local MineStateService = require(
+	ReplicatedStorage.ClientLogic.Services.MineStateService
+)
+
+local BombsConfig = require(
+	ReplicatedStorage.Logic.Configs.BombsConfig
+)
+
+local AreasConfig = require(
+	ReplicatedStorage.Logic.Configs.AreasConfig
+)
+
+local Signals = require(
+	ReplicatedStorage.Logic.Signals
+)
+
+--========================================================
+-- WAIT FOR CLIENT
+--========================================================
+
+if not Player:GetAttribute("CoreInitialized") then
+	repeat
+		task.wait(0.1)
+	until Player:GetAttribute("CoreInitialized")
+end
+
+--========================================================
+-- SAFE SESSION HELPERS
+--========================================================
+
+local function SafeRawGet(Object, Key)
+	if typeof(Object) ~= "table" then
+		return nil
+	end
+
+	local Ok, Value = pcall(rawget, Object, Key)
+
+	if Ok then
+		return Value
+	end
+
+	return nil
+end
+
+local function GetMetaSafe(Object)
+	local Ok, Result = pcall(function()
+		if getrawmetatable then
+			return getrawmetatable(Object)
+		end
+
+		return getmetatable(Object)
+	end)
+
+	return Ok and Result or nil
+end
+
+local function GetMethodRaw(Object, Name)
+	if typeof(Object) ~= "table" then
+		return nil
+	end
+
+	local Direct = SafeRawGet(Object, Name)
+
+	if type(Direct) == "function" then
+		return Direct
+	end
+
+	local Meta = GetMetaSafe(Object)
+
+	if typeof(Meta) ~= "table" then
+		return nil
+	end
+
+	local Index = SafeRawGet(Meta, "__index")
+
+	if typeof(Index) == "table" then
+		local Method = SafeRawGet(Index, Name)
+
+		if type(Method) == "function" then
+			return Method
+		end
+	end
+
+	return nil
+end
+
+local function LooksLikeSession(Object)
+	if typeof(Object) ~= "table" then
+		return false
+	end
+
+	if SafeRawGet(Object, "HeldBombs") == nil then
+		return false
+	end
+
+	if SafeRawGet(Object, "ActiveBombs") == nil then
+		return false
+	end
+
+	if SafeRawGet(Object, "EquippedBomb") == nil then
+		return false
+	end
+
+	return
+		GetMethodRaw(Object, "PlaceBomb") ~= nil
+		and GetMethodRaw(Object, "IgniteBomb") ~= nil
+		and GetMethodRaw(Object, "IsInMineArea") ~= nil
+end
+
+local function FindSession()
+	if getgc then
+		local Ok, Objects = pcall(getgc, true)
+
+		if Ok and typeof(Objects) == "table" then
+			for _, Object in ipairs(Objects) do
+				local Success, Match = pcall(
+					LooksLikeSession,
+					Object
+				)
+
+				if Success and Match then
+					return Object
+				end
+			end
+		end
+	end
+
+	if getreg then
+		local Ok, Registry = pcall(getreg)
+
+		if Ok and typeof(Registry) == "table" then
+			for _, Object in pairs(Registry) do
+				local Success, Match = pcall(
+					LooksLikeSession,
+					Object
+				)
+
+				if Success and Match then
+					return Object
+				end
+			end
+		end
+	end
+
+	return nil
+end
+
+local Session
+
+repeat
+	Session = FindSession()
+
+	if not Session then
+		task.wait(0.5)
+	end
+until Session
+
+local function CallSession(Name, ...)
+	local Method = GetMethodRaw(Session, Name)
+
+	if type(Method) ~= "function" then
+		return nil
+	end
+
+	local Args = table.pack(...)
+
+	local Ok, Result = pcall(function()
+		return Method(
+			Session,
+			table.unpack(Args, 1, Args.n)
+		)
+	end)
+
+	if not Ok then
+		warn("[SESSION]", Name, Result)
+		return nil
+	end
+
+	return Result
+end
+
+--========================================================
+-- GENERIC HELPERS
+--========================================================
+
+local function CountTable(T)
+	local Count = 0
+
+	if typeof(T) == "table" then
+		for _ in pairs(T) do
+			Count += 1
+		end
+	end
+
+	return Count
+end
+
+--========================================================
+-- CHARACTER / AREA
+--========================================================
+
+local function GetRoot()
+	local Character = Player.Character
+
+	return Character
+		and Character:FindFirstChild("HumanoidRootPart")
+end
+
+local function IsInMine()
+	return CallSession("IsInMineArea") == true
+end
+
+local function GetCurrentAreaName()
+	local Ok, AreaName = pcall(function()
+		return MineStateService.GetAreaName()
+	end)
+
+	if Ok and AreaName then
+		return AreaName
+	end
+
+	return nil
+end
+
+local function GetOwnedArea()
+	local OwnedAreas =
+		SafeRawGet(
+			Session,
+			"OwnedAreas"
+		)
+
+	if typeof(OwnedAreas) ~= "table" then
+		return nil
+	end
+
+	-- Always return the highest progression area, not an
+	-- arbitrary pairs() entry.
+	local Ordered =
+		AreasConfig.GetOrderedNames()
+
+	for Index = #Ordered, 1, -1 do
+		local AreaName =
+			Ordered[Index]
+
+		if OwnedAreas[AreaName] then
+			return AreaName
+		end
+
+		-- Support array-style ownership too.
+		if table.find(
+			OwnedAreas,
+			AreaName
+		) then
+
+			return AreaName
+		end
+	end
+
+	return nil
+end
+
+local function OwnsArea(AreaName)
+	local OwnedAreas =
+		SafeRawGet(
+			Session,
+			"OwnedAreas"
+		)
+
+	if typeof(OwnedAreas) ~= "table" then
+		return false
+	end
+
+	return
+		OwnedAreas[AreaName] == true
+		or table.find(
+			OwnedAreas,
+			AreaName
+		) ~= nil
+end
+
+--========================================================
+-- RAYFIELD
+--========================================================
+
+local Rayfield = loadstring(
+	game:HttpGet("https://sirius.menu/gen2")
+)()
+
+local Window = Rayfield:CreateWindow({
+	name = "+1 TNT Mining",
+	subtitle = "ScriptsRBX.com",
+	sidebarLayout = true,
+})
+
+local MainTab = Window:CreateTab({
+	name = "Autofarms",
+	icon = 0,
+})
+
+local UpgradeTab = Window:CreateTab({
+	name = "Upgrades",
+	icon = 0,
+})
+
+--========================================================
+-- STATE
+--========================================================
+
+local AutoFarm = false
+local AutoRefill = true
+local AutoCollect = false
+local AutoSell = false
+local AutoRebirth = false
+local AutoMineLuck = false
+local AutoBuyArea = false
+local AutoBuyBestBomb = false
+local AutoEquipBestBomb = false
+local AutoVoidRecovery = true
+
+local FarmBusy = false
+local RefillBusy = false
+local CollectBusy = false
+local SellBusy = false
+local RebirthBusy = false
+local BombShopBusy = false
+local BombShopBusySince = 0
+local BombShopTripBusy = false
+local AreaPurchaseBusy = false
+local BombShopRetryAt = 0
+local MineReturnBusy = false
+
+local ReservedBlocks = {}
+local PendingBombs = {}
+
+local RejectStreak = 0
+local LastFarmProgress = os.clock()
+local LastFarmRecovery = 0
+
+local FARM_DELAY = 0.09
+local MAX_REJECTS = 8
+
+local COLLECT_MOVE_DELAY = 0.07
+local COLLECT_LOOP_DELAY = 0.65
+
+local SELL_INTERVAL = 5
+local REBIRTH_INTERVAL = 5
+local UPGRADE_DELAY = 1
+local MINE_LUCK_DELAY = 1
+local AREA_BUY_DELAY = 2
+local BOMB_SHOP_DELAY = 2
+local BOMB_SHOP_LOBBY_WAIT = 2.1
+
+local LastSell = 0
+local LastRebirth = 0
+local LastFailedRefill = 0
+local VoidRecoveryCooldown = 0
+
+--========================================================
+-- UPGRADE STATE
+--========================================================
+
+local UpgradeStates = {
+	MaxHeldBombs = false,
+	MaxActiveBombs = false,
+	BombExplosionRadius = false,
+	CollectionRange = false,
+}
+
+--========================================================
+-- SELL
+--========================================================
+
+local function SellBlocks()
+	if SellBusy then
+		return false
+	end
+
+	SellBusy = true
+
+	local BeforeMoney =
+		tonumber(
+			SafeRawGet(
+				Session,
+				"Money"
+			)
+		) or 0
+
+	local Ok, Result =
+		pcall(function()
+			return ClientAction:InvokeServer({
+				"SellBlocks",
+				{}
+			})
+		end)
+
+	if not Ok
+		or typeof(Result) ~= "table"
+		or Result.Success ~= true then
+
+		SellBusy = false
+		return false
+	end
+
+	local Payout =
+		tonumber(Result.Payout) or 0
+
+	-- Give the normal player-data update a moment to update
+	-- Session.Money itself.
+	task.wait(0.15)
+
+	local CurrentMoney =
+		tonumber(
+			SafeRawGet(
+				Session,
+				"Money"
+			)
+		) or BeforeMoney
+
+	-- Only mirror the payout locally if the normal update did
+	-- not change the session value. This avoids visual doubles.
+	if CurrentMoney == BeforeMoney
+		and Payout > 0 then
+
+		CurrentMoney =
+			BeforeMoney + Payout
+
+		pcall(function()
+			rawset(
+				Session,
+				"Money",
+				CurrentMoney
+			)
+		end)
+	end
+
+	-- Refresh the normal HUD listener.
+	pcall(function()
+		local Signals =
+			require(
+				ReplicatedStorage.Logic.Signals
+			)
+
+		Signals.Fire(
+			"MoneyChanged",
+			Session,
+			CurrentMoney
+		)
+	end)
+
+	SellBusy = false
+	return true
+end
+
+--========================================================
+-- MINE BLOCKS
+--========================================================
+
+local function ParseBlockName(Name)
+	if type(Name) ~= "string" then
+		return nil
+	end
+
+	local CleanName =
+		Name:match("^[^:]+:(.+)$")
+		or Name
+
+	local A, B, C =
+		CleanName:match(
+			"^(%d+)_(%d+)_(%d+)$"
+		)
+
+	if A then
+		return
+			tonumber(A),
+			tonumber(B),
+			tonumber(C)
+	end
+
+	local DynamicA, DynamicB =
+		CleanName:match(
+			"^Dynamic_(%d+)_(%d+)$"
+		)
+
+	if DynamicA then
+		return
+			100000 + tonumber(DynamicA),
+			tonumber(DynamicB),
+			0
+	end
+
+	return nil
+end
+
+local function GetMineBlocks()
+	if not IsInMine() then
+		return {}
+	end
+
+	local Folder =
+		workspace:FindFirstChild(
+			"ClientMineBlocks"
+		)
+
+	if not Folder then
+		return {}
+	end
+
+	local Blocks = {}
+
+	for _, Object in ipairs(
+		Folder:GetDescendants()
+	) do
+		if Object:IsA("BasePart") then
+			local A, B, C =
+				ParseBlockName(
+					Object.Name
+				)
+
+			if A then
+				Blocks[#Blocks + 1] = {
+					Part = Object,
+					A = A,
+					B = B,
+					C = C,
+				}
+			end
+		end
+	end
+
+	table.sort(Blocks, function(X, Y)
+		if X.A ~= Y.A then
+			return X.A < Y.A
+		end
+
+		if X.B ~= Y.B then
+			return X.B < Y.B
+		end
+
+		return X.C < Y.C
+	end)
+
+	return Blocks
+end
+
+--========================================================
+-- RESERVATIONS
+--========================================================
+
+local function ReserveBlock(Block, Seconds)
+	if Block then
+		ReservedBlocks[Block.Name] =
+			os.clock() + (Seconds or 2)
+	end
+end
+
+local function IsReserved(Block)
+	local Expire =
+		ReservedBlocks[Block.Name]
+
+	if not Expire then
+		return false
+	end
+
+	if os.clock() >= Expire then
+		ReservedBlocks[Block.Name] = nil
+		return false
+	end
+
+	return true
+end
+
+local function ClearReservations()
+	table.clear(ReservedBlocks)
+end
+
+--========================================================
+-- ACTIVE TNT
+--========================================================
+
+local function SessionActiveBombCount()
+	local Count = 0
+
+	local Bombs =
+		SafeRawGet(
+			Session,
+			"ActiveBombs"
+		)
+
+	for _ in Bombs or {} do
+		Count += 1
+	end
+
+	return Count
+end
+
+local function MaxActiveBombs()
+	return math.max(
+		math.floor(
+			tonumber(
+				SafeRawGet(
+					Session,
+					"MaxActiveBombs"
+				)
+			) or 1
+		),
+		1
+	)
+end
+
+local function RefreshPendingBombs()
+	local SessionBombs =
+		SafeRawGet(
+			Session,
+			"ActiveBombs"
+		)
+
+	local Now = os.clock()
+
+	for Id, Data in pairs(PendingBombs) do
+		local InSession =
+			SessionBombs
+			and SessionBombs[Id] ~= nil
+
+		local InWorkspace =
+			ActiveBombsFolder:FindFirstChild(Id) ~= nil
+
+		if InSession or InWorkspace then
+			PendingBombs[Id] = nil
+
+		elseif Now - Data.Created > 2.5 then
+			PendingBombs[Id] = nil
+		end
+	end
+end
+
+local function PendingCount()
+	RefreshPendingBombs()
+
+	return CountTable(PendingBombs)
+end
+
+local function EffectiveActiveCount()
+	RefreshPendingBombs()
+
+	local Replicated =
+		math.max(
+			SessionActiveBombCount(),
+			#ActiveBombsFolder:GetChildren()
+		)
+
+	return
+		Replicated
+		+ CountTable(PendingBombs)
+end
+
+--========================================================
+-- TNT POSITION CHECKS
+--========================================================
+
+local function IsNearRenderedBomb(Position)
+	for _, Bomb in ipairs(
+		ActiveBombsFolder:GetChildren()
+	) do
+		local BombPosition
+
+		if Bomb:IsA("Model") then
+			BombPosition =
+				Bomb:GetPivot().Position
+
+		elseif Bomb:IsA("BasePart") then
+			BombPosition = Bomb.Position
+		end
+
+		if BombPosition then
+			local Delta =
+				Vector2.new(
+					Position.X,
+					Position.Z
+				)
+				-
+				Vector2.new(
+					BombPosition.X,
+					BombPosition.Z
+				)
+
+			if Delta.Magnitude < 4 then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+local function IsNearPendingBomb(Position)
+	for _, Data in pairs(PendingBombs) do
+		local P = Data.Position
+
+		if P then
+			local Delta =
+				Vector2.new(
+					Position.X,
+					Position.Z
+				)
+				-
+				Vector2.new(
+					P.X,
+					P.Z
+				)
+
+			if Delta.Magnitude < 4 then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
+local function GetNextBombBlock()
+	if not IsInMine() then
+		return nil
+	end
+
+	local Root = GetRoot()
+	local Candidates = {}
+
+	for _, Entry in ipairs(GetMineBlocks()) do
+		local Part = Entry.Part
+
+		if Part
+			and Part.Parent
+			and not IsReserved(Part) then
+
+			local Distance = 0
+
+			if Root then
+				Distance =
+					(Part.Position - Root.Position).Magnitude
+			end
+
+			Candidates[#Candidates + 1] = {
+				Part = Part,
+				Distance = Distance,
+				A = Entry.A,
+				B = Entry.B,
+				C = Entry.C,
+			}
+		end
+	end
+
+	table.sort(Candidates, function(X, Y)
+		if X.Distance ~= Y.Distance then
+			return X.Distance < Y.Distance
+		end
+
+		if X.A ~= Y.A then
+			return X.A < Y.A
+		end
+
+		if X.B ~= Y.B then
+			return X.B < Y.B
+		end
+
+		return X.C < Y.C
+	end)
+
+	return
+		Candidates[1]
+		and Candidates[1].Part
+		or nil
+end
+
+--========================================================
+-- PLACE / IGNITE TNT
+-- Placement is calculated from the OUTSIDE FACE of the
+-- rendered mine block instead of using Block.Position.
+-- Putting the TNT at Block.Position places it inside the
+-- mine block and is rejected by the server.
+--========================================================
+
+local function GetBombRootSize()
+	local Models =
+		ReplicatedStorage
+		:FindFirstChild("Assets")
+
+	Models =
+		Models
+		and Models:FindFirstChild("Models")
+
+	local Template =
+		Models
+		and Models:FindFirstChild("BombTemplate")
+
+	local Root =
+		Template
+		and Template:FindFirstChild("Root")
+
+	if Root
+		and Root:IsA("BasePart") then
+
+		return Root.Size
+	end
+
+	-- Safe fallback for the normal mine grid.
+	return Vector3.new(4, 4, 4)
+end
+
+local function GetPlacementCandidates(Block)
+	local BombSize =
+		GetBombRootSize()
+
+	local BlockHalf =
+		Block.Size / 2
+
+	local BombHalf =
+		BombSize / 2
+
+	-- A slightly larger gap is more reliable than placing
+	-- exactly flush with the block face.
+	local Gap = 0.2
+
+	local Up =
+		Block.CFrame.UpVector
+		* (BlockHalf.Y + BombHalf.Y + Gap)
+
+	local Right =
+		Block.CFrame.RightVector
+		* (BlockHalf.X + BombHalf.X + Gap)
+
+	local Look =
+		Block.CFrame.LookVector
+		* (BlockHalf.Z + BombHalf.Z + Gap)
+
+	local Position =
+		Block.Position
+
+	return {
+		CFrame.new(Position + Up),
+		CFrame.new(Position + Right),
+		CFrame.new(Position - Right),
+		CFrame.new(Position + Look),
+		CFrame.new(Position - Look),
+	}
+end
+
+local function PlaceBomb(Block)
+	if not IsInMine()
+		or not Block
+		or not Block.Parent then
+
+		return nil
+	end
+
+	local BombName =
+		SafeRawGet(
+			Session,
+			"EquippedBomb"
+		)
+
+	if not BombName then
+		return nil
+	end
+
+	for _, PlacementCFrame
+		in ipairs(
+			GetPlacementCandidates(Block)
+		) do
+
+		if not IsInMine()
+			or not Block.Parent then
+
+			return nil
+		end
+
+		-- Avoid trying a face that is already occupied by
+		-- another rendered / pending TNT.
+		if not IsNearRenderedBomb(
+			PlacementCFrame.Position
+		)
+			and not IsNearPendingBomb(
+				PlacementCFrame.Position
+			) then
+
+			local Result =
+				CallSession(
+					"PlaceBomb",
+					PlacementCFrame,
+					nil,
+					BombName
+				)
+
+			if typeof(Result) == "table"
+				and Result.Success
+				and Result.Id then
+
+				local Id =
+					tostring(Result.Id)
+
+				PendingBombs[Id] = {
+					Created = os.clock(),
+					Position =
+						PlacementCFrame.Position,
+				}
+
+				LastFarmProgress = os.clock()
+
+				return Id
+			end
+		end
+
+		task.wait(0.025)
+	end
+
+	return nil
+end
+
+local function IgniteBomb(Id)
+	if not IsInMine()
+		or not Id then
+
+		return false
+	end
+
+	-- The server/session can need a frame or two before the
+	-- freshly-placed id is ready to ignite.
+	for Attempt = 1, 4 do
+		local Result =
+			CallSession(
+				"IgniteBomb",
+				Id
+			)
+
+		if typeof(Result) == "table"
+			and Result.Success == true then
+
+			LastFarmProgress = os.clock()
+
+			return true
+		end
+
+		task.wait(
+			Attempt * 0.05
+		)
+	end
+
+	return false
+end
+
+--========================================================
+-- FIND MINE MODEL
+--========================================================
+
+local function GetAreaModel(AreaName)
+	local Map =
+		workspace:FindFirstChild("Map")
+
+	local Areas =
+		Map
+		and Map:FindFirstChild("Areas")
+
+	if not Areas then
+		return nil
+	end
+
+	for _, Area in ipairs(
+		Areas:GetChildren()
+	) do
+		local Name =
+			Area:GetAttribute("AreaName")
+			or Area.Name
+
+		if Name == AreaName then
+			return Area
+		end
+	end
+
+	return nil
+end
+
+--========================================================
+-- SAFE MINE RETURN
+--========================================================
+
+local function GetMineReturnCFrame()
+	local AreaName =
+		GetOwnedArea()
+		or GetCurrentAreaName()
+
+	if not AreaName then
+		return nil
+	end
+
+	local Area =
+		GetAreaModel(AreaName)
+
+	if not Area then
+		return nil
+	end
+
+	local Mine =
+		Area:FindFirstChild("Mine")
+
+	if not Mine then
+		return nil
+	end
+
+	local BlocksArea =
+		Mine:FindFirstChild(
+			"BlocksArea"
+		)
+
+	if not BlocksArea
+		or not BlocksArea:IsA("BasePart") then
+
+		return nil
+	end
+
+	local Position =
+		BlocksArea.Position
+		+
+		BlocksArea.CFrame.UpVector
+		*
+		(
+			BlocksArea.Size.Y / 2
+			+ 6
+		)
+
+	return CFrame.new(
+		Position,
+		Position
+		+ BlocksArea.CFrame.LookVector
+	)
+end
+
+local function ReturnToMineIfNeeded()
+	if not AutoFarm
+		or RefillBusy
+		or RebirthBusy
+		or MineReturnBusy
+		or BombShopBusy
+		or BombShopTripBusy
+		or AreaPurchaseBusy then
+
+		return false
+	end
+
+	if IsInMine() then
+		return true
+	end
+
+	local Root = GetRoot()
+	local Target = GetMineReturnCFrame()
+
+	if not Root or not Target then
+		return false
+	end
+
+	MineReturnBusy = true
+
+	Root.AssemblyLinearVelocity =
+		Vector3.zero
+
+	Root.AssemblyAngularVelocity =
+		Vector3.zero
+
+	Root.CFrame = Target
+
+	local Deadline =
+		os.clock() + 5
+
+	while os.clock() < Deadline do
+		if IsInMine() then
+			ClearReservations()
+			table.clear(PendingBombs)
+
+			MineReturnBusy = false
+
+			return true
+		end
+
+		task.wait(0.1)
+	end
+
+	MineReturnBusy = false
+
+	return false
+end
+
+--========================================================
+-- VOID RECOVERY
+--========================================================
+
+local function RecoverFromVoid()
+	if os.clock()
+		< VoidRecoveryCooldown then
+
+		return false
+	end
+
+	local Root = GetRoot()
+
+	if not Root then
+		return false
+	end
+
+	if Root.Position.Y >
+		workspace.FallenPartsDestroyHeight + 128 then
+
+		return false
+	end
+
+	VoidRecoveryCooldown =
+		os.clock() + 2
+
+	local Result =
+		CallSession(
+			"RecoverFromVoid"
+		)
+
+	return Result ~= false
+end
+
+local function ValidatePlayerPosition()
+	local Root = GetRoot()
+
+	if not Root then
+		return
+	end
+
+	if Root.Position.Y <=
+		workspace.FallenPartsDestroyHeight + 128 then
+
+		RecoverFromVoid()
+		return
+	end
+
+	if IsInMine() then
+		local Safe =
+			GetMineReturnCFrame()
+
+		if Safe
+			and Root.Position.Y
+				< Safe.Position.Y - 80 then
+
+			Root.AssemblyLinearVelocity =
+				Vector3.zero
+
+			Root.CFrame = Safe
+		end
+	end
+end
+
+--========================================================
+-- LOBBY / REFILL
+--========================================================
+
+local function GetLobbySpawn()
+	local Map =
+		workspace:FindFirstChild("Map")
+
+	local Lobby =
+		Map
+		and Map:FindFirstChild("Lobby")
+
+	local Spawn =
+		Lobby
+		and Lobby:FindFirstChild(
+			"SpawnLocation"
+		)
+
+	return Spawn
+end
+
+local function RefillBombs()
+	if RefillBusy
+		or BombShopTripBusy
+		or not AutoRefill
+		or not IsInMine() then
+
+		return false
+	end
+
+	local Held =
+		tonumber(
+			SafeRawGet(
+				Session,
+				"HeldBombs"
+			)
+		) or 0
+
+	if Held > 0 then
+		return true
+	end
+
+	if os.clock()
+		- LastFailedRefill < 5 then
+
+		return false
+	end
+
+	local Root = GetRoot()
+	local Spawn = GetLobbySpawn()
+
+	if not Root
+		or not Spawn
+		or not Spawn:IsA("BasePart") then
+
+		return false
+	end
+
+	RefillBusy = true
+	FarmBusy = false
+
+	Root.AssemblyLinearVelocity =
+		Vector3.zero
+
+	Root.AssemblyAngularVelocity =
+		Vector3.zero
+
+	Root.CFrame =
+		Spawn.CFrame
+		* CFrame.new(0, 4, 0)
+
+	local LeaveTimeout =
+		os.clock() + 4
+
+	while os.clock() < LeaveTimeout do
+		if not IsInMine() then
+			break
+		end
+
+		task.wait(0.1)
+	end
+
+	if IsInMine() then
+		LastFailedRefill = os.clock()
+		RefillBusy = false
+
+		return false
+	end
+
+	if AutoSell then
+		SellBlocks()
+	end
+
+	local RefillTimeout =
+		os.clock() + 10
+
+	while os.clock() < RefillTimeout do
+		local Current =
+			tonumber(
+				SafeRawGet(
+					Session,
+					"HeldBombs"
+				)
+			) or 0
+
+		if Current > 0 then
+			ClearReservations()
+			table.clear(PendingBombs)
+
+			RejectStreak = 0
+			RefillBusy = false
+
+			if AutoFarm then
+				task.wait(0.25)
+
+				ReturnToMineIfNeeded()
+			end
+
+			return true
+		end
+
+		task.wait(0.4)
+	end
+
+	LastFailedRefill = os.clock()
+	RefillBusy = false
+
+	return false
+end
+
+--========================================================
+-- FARM
+--========================================================
+
+local function RecoverFarmState()
+	if os.clock() - LastFarmRecovery < 2 then
+		return
+	end
+
+	LastFarmRecovery = os.clock()
+
+	ClearReservations()
+	table.clear(PendingBombs)
+	RejectStreak = 0
+	FarmBusy = false
+
+	-- Never let a stale shop lock freeze the mine forever.
+	if BombShopBusy
+		and BombShopBusySince > 0
+		and os.clock() - BombShopBusySince > 3 then
+
+		BombShopBusy = false
+		BombShopBusySince = 0
+	end
+
+	ValidatePlayerPosition()
+
+	if AutoFarm
+		and not IsInMine()
+		and not RefillBusy
+		and not RebirthBusy then
+
+		task.spawn(
+			ReturnToMineIfNeeded
+		)
+	end
+end
+
+local function FarmTick()
+	if not AutoFarm
+		or FarmBusy
+		or RefillBusy
+		or RebirthBusy
+		or MineReturnBusy
+		or BombShopBusy
+		or AreaPurchaseBusy then
+
+		return
+	end
+
+	if not IsInMine() then
+		RecoverFarmState()
+		return
+	end
+
+	ValidatePlayerPosition()
+
+	local Held =
+		tonumber(
+			SafeRawGet(
+				Session,
+				"HeldBombs"
+			)
+		) or 0
+
+	if Held <= 0 then
+		if AutoRefill then
+			task.spawn(
+				RefillBombs
+			)
+		end
+
+		return
+	end
+
+	RefreshPendingBombs()
+
+	if EffectiveActiveCount()
+		>= MaxActiveBombs() then
+
+		return
+	end
+
+	FarmBusy = true
+
+	local Block =
+		GetNextBombBlock()
+
+	if not Block then
+		FarmBusy = false
+
+		-- Mine regenerated / client block list changed.
+		-- Clear stale reservations instead of getting stuck.
+		if os.clock() - LastFarmProgress > 1.5 then
+			RecoverFarmState()
+		end
+
+		return
+	end
+
+	ReserveBlock(
+		Block,
+		1.5
+	)
+
+	local Id =
+		PlaceBomb(Block)
+
+	if Id then
+		RejectStreak = 0
+
+		ReserveBlock(
+			Block,
+			3
+		)
+
+		IgniteBomb(Id)
+
+	else
+		ReserveBlock(
+			Block,
+			0.35
+		)
+
+		RejectStreak += 1
+
+		-- If a batch of placements is rejected, reset the
+		-- local bookkeeping immediately. Do not refill unless
+		-- HeldBombs is actually zero.
+		if RejectStreak >= 5 then
+			RecoverFarmState()
+		end
+	end
+
+	FarmBusy = false
+end
+
+--========================================================
+-- COLLECT
+--========================================================
+
+local function GetCollectiblePosition(Object)
+	if Object:IsA("BasePart") then
+		return Object.Position
+	end
+
+	if Object:IsA("Model") then
+		return Object:GetPivot().Position
+	end
+
+	local Part =
+		Object:FindFirstChildWhichIsA(
+			"BasePart",
+			true
+		)
+
+	return Part and Part.Position
+end
+
+local function CollectOne(Id)
+	local Result =
+		CallSession(
+			"CollectBlocks",
+			{ Id },
+			true
+		)
+
+	if typeof(Result) == "table" then
+		if Result.Success
+			and GetMethodRaw(
+				Session,
+				"ApplyCollectedBlocks"
+			) then
+
+			CallSession(
+				"ApplyCollectedBlocks",
+				Result
+			)
+		end
+
+		return Result.Success == true
+	end
+
+	return false
+end
+
+local function CollectEverything()
+	if not AutoCollect
+		or CollectBusy
+		or RefillBusy
+		or RebirthBusy
+		or MineReturnBusy
+		or BombShopBusy
+		or BombShopTripBusy
+		or not IsInMine() then
+
+		return
+	end
+
+	CollectBusy = true
+
+	local Folder =
+		workspace:FindFirstChild(
+			"ClientCollectibleBlocks"
+		)
+
+	local Root = GetRoot()
+
+	if not Folder or not Root then
+		CollectBusy = false
+		return
+	end
+
+	local ReturnCFrame =
+		Root.CFrame
+
+	local Items = {}
+
+	for _, Object in ipairs(
+		Folder:GetChildren()
+	) do
+		if string.find(
+			Object.Name,
+			":",
+			1,
+			true
+		) then
+
+			local Position =
+				GetCollectiblePosition(Object)
+
+			if Position then
+				Items[#Items + 1] = {
+					Id = Object.Name,
+					Position = Position,
+				}
+			end
+		end
+	end
+
+	for _, Item in ipairs(Items) do
+		if not AutoCollect
+			or not IsInMine()
+			or RefillBusy
+			or RebirthBusy
+			or MineReturnBusy
+			or BombShopBusy then
+
+			break
+		end
+
+		local CurrentFolder =
+			workspace:FindFirstChild(
+				"ClientCollectibleBlocks"
+			)
+
+		local Object =
+			CurrentFolder
+			and CurrentFolder
+				:FindFirstChild(Item.Id)
+
+		if Object then
+			Root = GetRoot()
+
+			local Position =
+				GetCollectiblePosition(Object)
+
+			if Root and Position then
+				Root.AssemblyLinearVelocity =
+					Vector3.zero
+
+				Root.AssemblyAngularVelocity =
+					Vector3.zero
+
+				Root.CFrame =
+					CFrame.new(
+						Position
+						+ Vector3.new(
+							0,
+							2.5,
+							0
+						)
+					)
+
+				task.wait(
+					COLLECT_MOVE_DELAY
+				)
+
+				CollectOne(Item.Id)
+
+				task.wait(0.035)
+			end
+		end
+	end
+
+	Root = GetRoot()
+
+	if Root
+		and IsInMine()
+		and not RefillBusy then
+
+		Root.AssemblyLinearVelocity =
+			Vector3.zero
+
+		Root.CFrame =
+			ReturnCFrame
+
+		task.wait(0.1)
+
+		ValidatePlayerPosition()
+	end
+
+	CollectBusy = false
+end
+
+--========================================================
+-- REBIRTH
+--========================================================
+
+local function PerformRebirth()
+	if RebirthBusy
+		or RefillBusy
+		or BombShopBusy
+		or BombShopTripBusy
+		or AreaPurchaseBusy then
+
+		return false
+	end
+
+	RebirthBusy = true
+	FarmBusy = false
+
+	local Result =
+		CallSession(
+			"PerformRebirth"
+		)
+
+	if typeof(Result) == "table"
+		and Result.Success then
+
+		ClearReservations()
+		table.clear(PendingBombs)
+
+		RejectStreak = 0
+
+		task.wait(1)
+
+		RebirthBusy = false
+
+		if AutoFarm then
+			task.spawn(
+				ReturnToMineIfNeeded
+			)
+		end
+
+		return true
+	end
+
+	RebirthBusy = false
+
+	return false
+end
+
+--========================================================
+-- UPGRADES
+--========================================================
+
+local function BuyUpgrade(Name)
+	local Result =
+		CallSession(
+			"BuyUpgrade",
+			Name
+		)
+
+	return
+		typeof(Result) == "table"
+		and Result.Success == true
+end
+
+local function BuyMineLuck()
+	local AreaName =
+		GetOwnedArea()
+		or GetCurrentAreaName()
+
+	if not AreaName then
+		return false
+	end
+
+	local Result =
+		CallSession(
+			"BuyUpgrade",
+			"MineLuck",
+			AreaName
+		)
+
+	return
+		typeof(Result) == "table"
+		and Result.Success == true
+end
+
+--========================================================
+-- AREA PURCHASE / AREA SWITCHING
+--========================================================
+
+local function GetNextAreaToBuy()
+	local HighestOwned =
+		GetOwnedArea()
+
+	if not HighestOwned then
+		return nil
+	end
+
+	return
+		AreasConfig.GetNextName(
+			HighestOwned
+		)
+end
+
+local function GetAreaPrice(AreaName)
+	local Config =
+		AreasConfig[AreaName]
+
+	return
+		Config
+		and tonumber(Config.Price)
+		or nil
+end
+
+local function MirrorOwnedArea(AreaName)
+	local OwnedAreas =
+		SafeRawGet(
+			Session,
+			"OwnedAreas"
+		)
+
+	if typeof(OwnedAreas) ~= "table" then
+		return
+	end
+
+	local ArrayStyle = false
+
+	for Key, Value in pairs(OwnedAreas) do
+		if typeof(Key) == "number"
+			and typeof(Value) == "string" then
+
+			ArrayStyle = true
+			break
+		end
+	end
+
+	if ArrayStyle then
+		if not table.find(
+			OwnedAreas,
+			AreaName
+		) then
+
+			table.insert(
+				OwnedAreas,
+				AreaName
+			)
+		end
+	else
+		OwnedAreas[AreaName] = true
+	end
+end
+
+local function WaitForAreaRendered(
+	AreaName,
+	Timeout
+)
+	local Deadline =
+		os.clock()
+		+ (Timeout or 8)
+
+	while os.clock() < Deadline do
+		local Area =
+			GetAreaModel(
+				AreaName
+			)
+
+		if Area
+			and Area:GetAttribute(
+				"MineRenderReady"
+			) ~= false then
+
+			local Mine =
+				Area:FindFirstChild(
+					"Mine"
+				)
+
+			local BlocksArea =
+				Mine
+				and Mine:FindFirstChild(
+					"BlocksArea"
+				)
+
+			if BlocksArea
+				and BlocksArea:IsA(
+					"BasePart"
+				) then
+
+				return Area
+			end
+		end
+
+		task.wait(0.1)
+	end
+
+	return nil
+end
+
+local function TeleportToAreaMine(
+	AreaName
+)
+	local Area =
+		WaitForAreaRendered(
+			AreaName,
+			10
+		)
+
+	if not Area then
+		return false
+	end
+
+	local Mine =
+		Area:FindFirstChild(
+			"Mine"
+		)
+
+	local BlocksArea =
+		Mine
+		and Mine:FindFirstChild(
+			"BlocksArea"
+		)
+
+	local Root =
+		GetRoot()
+
+	if not Root
+		or not BlocksArea
+		or not BlocksArea:IsA(
+			"BasePart"
+		) then
+
+		return false
+	end
+
+	local Position =
+		BlocksArea.Position
+		+
+		BlocksArea.CFrame.UpVector
+		*
+		(
+			BlocksArea.Size.Y / 2
+			+ 6
+		)
+
+	Root.AssemblyLinearVelocity =
+		Vector3.zero
+
+	Root.AssemblyAngularVelocity =
+		Vector3.zero
+
+	Root.CFrame =
+		CFrame.new(
+			Position,
+			Position
+			+ BlocksArea.CFrame.LookVector
+		)
+
+	-- MineAreaEngine swaps the active rendered mine into the
+	-- same ClientMineBlocks folder when the new zone is entered.
+	local Deadline =
+		os.clock() + 6
+
+	while os.clock() < Deadline do
+		if GetCurrentAreaName()
+			== AreaName
+			and IsInMine() then
+
+			ClearReservations()
+			table.clear(
+				PendingBombs
+			)
+
+			RejectStreak = 0
+			LastFarmProgress =
+				os.clock()
+
+			return true
+		end
+
+		task.wait(0.1)
+	end
+
+	return false
+end
+
+local function PurchaseNextArea()
+	if AreaPurchaseBusy
+		or RefillBusy
+		or RebirthBusy
+		or BombShopBusy
+		or BombShopTripBusy
+		or MineReturnBusy then
+
+		return false
+	end
+
+	local NextArea =
+		GetNextAreaToBuy()
+
+	if not NextArea then
+		return false
+	end
+
+	local Price =
+		GetAreaPrice(
+			NextArea
+		)
+
+	local Money =
+		tonumber(
+			SafeRawGet(
+				Session,
+				"Money"
+			)
+		) or 0
+
+	if not Price
+		or Money < Price then
+
+		return false
+	end
+
+	AreaPurchaseBusy = true
+
+	-- Pause creation of new TNT while the area renderer swaps
+	-- the shared ClientMineBlocks contents.
+	FarmBusy = false
+
+	local Ok, Result =
+		pcall(function()
+			return ClientAction:InvokeServer({
+				"PurchaseArea",
+				{
+					NextArea
+				}
+			})
+		end)
+
+	if not Ok
+		or (
+			typeof(Result) == "table"
+			and Result.Success == false
+		) then
+
+		AreaPurchaseBusy = false
+		return false
+	end
+
+	-- Allow normal player-data replication first.
+	task.wait(0.2)
+
+	local Confirmed =
+		OwnsArea(
+			NextArea
+		)
+		or (
+			typeof(Result) == "table"
+			and Result.Success == true
+		)
+
+	if not Confirmed then
+		AreaPurchaseBusy = false
+		return false
+	end
+
+	-- If the server confirmed success but the local session copy
+	-- hasn't updated yet, mirror it so area/UI listeners refresh.
+	if not OwnsArea(
+		NextArea
+	) then
+
+		MirrorOwnedArea(
+			NextArea
+		)
+	end
+
+	pcall(function()
+		Signals.Fire(
+			"OwnedAreasChanged",
+			Session,
+			SafeRawGet(
+				Session,
+				"OwnedAreas"
+			)
+		)
+	end)
+
+	-- Wait for AreaPurchaseEngine/AreaRenderer to create the new
+	-- area, then enter its mine. ClientMineBlocks will repopulate
+	-- automatically for that area.
+	task.wait(0.25)
+
+	local Entered =
+		TeleportToAreaMine(
+			NextArea
+		)
+
+	AreaPurchaseBusy = false
+
+	return Entered
+end
+
+--========================================================
+-- BOMB SHOP
+-- The playtest only reliably accepts BuyBomb after the
+-- player has been in the lobby/shop area briefly.
+--
+-- Flow:
+-- 1. Pause automation.
+-- 2. Let current TNT finish.
+-- 3. Teleport to BombShop PromptPart.
+-- 4. Wait ~2 seconds.
+-- 5. Buy best affordable TNT.
+-- 6. Equip it.
+-- 7. Refresh local shop/hotbar state.
+-- 8. Return to the mine and resume everything.
+--========================================================
+
+local SortedBombs = {}
+
+for Name, Config in pairs(BombsConfig) do
+	if Name ~= "Default"
+		and typeof(Config) == "table" then
+
+		SortedBombs[#SortedBombs + 1] = {
+			Name = Name,
+			Price = tonumber(Config.Price) or 0,
+			Damage = tonumber(Config.DamagePerClick) or 0,
+		}
+	end
+end
+
+table.sort(SortedBombs, function(A, B)
+	if A.Damage ~= B.Damage then
+		return A.Damage > B.Damage
+	end
+
+	return A.Price > B.Price
+end)
+
+local function OwnsBomb(Name)
+	return CallSession(
+		"OwnsBomb",
+		Name
+	) == true
+end
+
+local function GetBestOwnedBomb()
+	for _, Bomb in ipairs(SortedBombs) do
+		if OwnsBomb(Bomb.Name) then
+			return Bomb
+		end
+	end
+
+	return nil
+end
+
+local function GetBestAffordableUnownedBomb()
+	local Money =
+		tonumber(
+			SafeRawGet(
+				Session,
+				"Money"
+			)
+		) or 0
+
+	for _, Bomb in ipairs(SortedBombs) do
+		if Bomb.Price <= Money
+			and not OwnsBomb(Bomb.Name) then
+
+			return Bomb
+		end
+	end
+
+	return nil
+end
+
+local function InvokeBombAction(Action, Name)
+	local Ok, Result =
+		pcall(function()
+			return ClientAction:InvokeServer({
+				Action,
+				{
+					Name
+				}
+			})
+		end)
+
+	if not Ok then
+		warn(
+			"[BOMB SHOP]",
+			Action,
+			Name,
+			Result
+		)
+
+		return nil
+	end
+
+	return Result
+end
+
+local function MirrorOwnedBomb(Name)
+	local OwnedBombs =
+		SafeRawGet(
+			Session,
+			"OwnedBombs"
+		)
+
+	if typeof(OwnedBombs) ~= "table" then
+		return
+	end
+
+	local ArrayStyle = false
+
+	for Key, Value in pairs(OwnedBombs) do
+		if typeof(Key) == "number"
+			and typeof(Value) == "string" then
+
+			ArrayStyle = true
+			break
+		end
+	end
+
+	if ArrayStyle then
+		if not table.find(
+			OwnedBombs,
+			Name
+		) then
+
+			table.insert(
+				OwnedBombs,
+				Name
+			)
+		end
+	else
+		OwnedBombs[Name] = true
+	end
+end
+
+local function MirrorEquippedBomb(Name)
+	if SafeRawGet(
+		Session,
+		"EquippedBomb"
+	) ~= Name then
+
+		pcall(function()
+			rawset(
+				Session,
+				"EquippedBomb",
+				Name
+			)
+		end)
+	end
+end
+
+local function RefreshBombUi(Action, Name)
+	pcall(function()
+		if Action == "BuyBomb" then
+			Signals.Fire(
+				"BombGranted",
+				Name
+			)
+
+			Signals.Fire(
+				"OwnedBombsChanged",
+				Name
+			)
+		end
+
+		if Action == "EquipBomb" then
+			Signals.Fire(
+				"EquippedBombChanged",
+				Name
+			)
+		end
+	end)
+end
+
+local function WaitUntilNoActiveBombs(Timeout)
+	local Deadline =
+		os.clock()
+		+ (Timeout or 8)
+
+	while os.clock() < Deadline do
+		RefreshPendingBombs()
+
+		if EffectiveActiveCount() <= 0 then
+			return true
+		end
+
+		task.wait(0.1)
+	end
+
+	-- Do not let stale local pending state permanently block a shop trip.
+	table.clear(PendingBombs)
+
+	return
+		EffectiveActiveCount() <= 0
+end
+
+local function GetBombShopPromptPart()
+	local Map =
+		workspace:FindFirstChild(
+			"Map"
+		)
+
+	local Lobby =
+		Map
+		and Map:FindFirstChild(
+			"Lobby"
+		)
+
+	local Shop =
+		Lobby
+		and Lobby:FindFirstChild(
+			"BombShop"
+		)
+
+	local PromptPart =
+		Shop
+		and Shop:FindFirstChild(
+			"PromptPart"
+		)
+
+	if PromptPart
+		and PromptPart:IsA(
+			"BasePart"
+		) then
+
+		return PromptPart
+	end
+
+	return nil
+end
+
+local function GoToBombShop()
+	local Root =
+		GetRoot()
+
+	local PromptPart =
+		GetBombShopPromptPart()
+
+	if not Root
+		or not PromptPart then
+
+		return false
+	end
+
+	Root.AssemblyLinearVelocity =
+		Vector3.zero
+
+	Root.AssemblyAngularVelocity =
+		Vector3.zero
+
+	Root.CFrame =
+		PromptPart.CFrame
+		* CFrame.new(
+			0,
+			3,
+			-4
+		)
+
+	-- Leaving a mine resets ActiveBombs and switches the player's
+	-- area state. The playtest appears to need a short lobby dwell
+	-- before BuyBomb is accepted reliably.
+	task.wait(
+		BOMB_SHOP_LOBBY_WAIT
+	)
+
+	return true
+end
+
+local function WaitForBombOwned(Name, Timeout)
+	local Deadline =
+		os.clock()
+		+ (Timeout or 3)
+
+	while os.clock() < Deadline do
+		if OwnsBomb(Name) then
+			return true
+		end
+
+		task.wait(0.1)
+	end
+
+	return false
+end
+
+local function WaitForBombEquipped(Name, Timeout)
+	local Deadline =
+		os.clock()
+		+ (Timeout or 3)
+
+	while os.clock() < Deadline do
+		if SafeRawGet(
+			Session,
+			"EquippedBomb"
+		) == Name then
+
+			return true
+		end
+
+		task.wait(0.1)
+	end
+
+	return false
+end
+
+local function BuyBombAtShop(Name)
+	local Result =
+		InvokeBombAction(
+			"BuyBomb",
+			Name
+		)
+
+	if typeof(Result) == "table"
+		and Result.Success == false then
+
+		return false
+	end
+
+	local Confirmed =
+		WaitForBombOwned(
+			Name,
+			3
+		)
+
+	if not Confirmed
+		and typeof(Result) == "table"
+		and Result.Success == true then
+
+		-- Server confirmed the purchase but this client's session
+		-- copy has not caught up yet.
+		MirrorOwnedBomb(
+			Name
+		)
+
+		Confirmed = true
+	end
+
+	if Confirmed then
+		RefreshBombUi(
+			"BuyBomb",
+			Name
+		)
+	end
+
+	return Confirmed
+end
+
+local function EquipBombAtShop(Name)
+	if not OwnsBomb(Name) then
+		return false
+	end
+
+	if SafeRawGet(
+		Session,
+		"EquippedBomb"
+	) == Name then
+
+		return true
+	end
+
+	local Result =
+		InvokeBombAction(
+			"EquipBomb",
+			Name
+		)
+
+	if typeof(Result) == "table"
+		and Result.Success == false then
+
+		return false
+	end
+
+	local Confirmed =
+		WaitForBombEquipped(
+			Name,
+			3
+		)
+
+	if not Confirmed
+		and typeof(Result) == "table"
+		and Result.Success == true then
+
+		MirrorEquippedBomb(
+			Name
+		)
+
+		Confirmed = true
+	end
+
+	if Confirmed then
+		MirrorEquippedBomb(
+			Name
+		)
+
+		RefreshBombUi(
+			"EquipBomb",
+			Name
+		)
+	end
+
+	return Confirmed
+end
+
+local function ReturnAfterBombShop(
+	PreviousArea,
+	PreviousCFrame
+)
+	-- Prefer returning to the highest owned mine because a purchase
+	-- may have happened alongside an area unlock.
+	local TargetArea =
+		GetOwnedArea()
+		or PreviousArea
+
+	if TargetArea then
+		local Entered =
+			TeleportToAreaMine(
+				TargetArea
+			)
+
+		if Entered then
+			return true
+		end
+	end
+
+	-- Fallback to the precise position we had before the shop trip.
+	local Root =
+		GetRoot()
+
+	if Root
+		and PreviousCFrame then
+
+		Root.AssemblyLinearVelocity =
+			Vector3.zero
+
+		Root.AssemblyAngularVelocity =
+			Vector3.zero
+
+		Root.CFrame =
+			PreviousCFrame
+
+		task.wait(0.35)
+
+		return true
+	end
+
+	return false
+end
+
+local function RunBombShopTrip()
+	if BombShopTripBusy
+		or BombShopBusy
+		or RefillBusy
+		or RebirthBusy
+		or AreaPurchaseBusy
+		or MineReturnBusy
+		or os.clock() < BombShopRetryAt then
+
+		return false
+	end
+
+	local BombToBuy =
+		AutoBuyBestBomb
+		and GetBestAffordableUnownedBomb()
+		or nil
+
+	local BestOwned =
+		AutoEquipBestBomb
+		and GetBestOwnedBomb()
+		or nil
+
+	local NeedsEquip =
+		BestOwned
+		and SafeRawGet(
+			Session,
+			"EquippedBomb"
+		) ~= BestOwned.Name
+
+	if not BombToBuy
+		and not NeedsEquip then
+
+		return false
+	end
+
+	BombShopTripBusy = true
+
+	-- Stop new work from all automation loops.
+	FarmBusy = false
+	CollectBusy = false
+
+	-- Let placed TNT finish so leaving the mine does not strand
+	-- the active-bomb bookkeeping.
+	WaitUntilNoActiveBombs(
+		8
+	)
+
+	local Root =
+		GetRoot()
+
+	local PreviousCFrame =
+		Root
+		and Root.CFrame
+		or nil
+
+	local PreviousArea =
+		GetCurrentAreaName()
+		or GetOwnedArea()
+
+	if not GoToBombShop() then
+		BombShopRetryAt =
+			os.clock() + 3
+
+		BombShopTripBusy = false
+
+		return false
+	end
+
+	BombShopBusy = true
+	BombShopBusySince =
+		os.clock()
+
+	local DidWork = false
+
+	-- Re-evaluate after reaching the lobby because money or ownership
+	-- may have updated while the farm was winding down.
+	if AutoBuyBestBomb then
+		BombToBuy =
+			GetBestAffordableUnownedBomb()
+
+		if BombToBuy then
+			if BuyBombAtShop(
+				BombToBuy.Name
+			) then
+
+				DidWork = true
+
+				if AutoEquipBestBomb then
+					task.wait(0.1)
+
+					EquipBombAtShop(
+						BombToBuy.Name
+					)
+				end
+			end
+		end
+	end
+
+	if AutoEquipBestBomb then
+		BestOwned =
+			GetBestOwnedBomb()
+
+		if BestOwned
+			and SafeRawGet(
+				Session,
+				"EquippedBomb"
+			) ~= BestOwned.Name then
+
+			if EquipBombAtShop(
+				BestOwned.Name
+			) then
+
+				DidWork = true
+			end
+		end
+	end
+
+	BombShopBusy = false
+	BombShopBusySince = 0
+
+	-- Make sure the shop/hotbar listeners have processed the changes.
+	task.wait(0.25)
+
+	ReturnAfterBombShop(
+		PreviousArea,
+		PreviousCFrame
+	)
+
+	ClearReservations()
+	table.clear(PendingBombs)
+
+	RejectStreak = 0
+	LastFarmProgress =
+		os.clock()
+
+	-- Small settle time after MineAreaEngine swaps ClientMineBlocks.
+	task.wait(0.35)
+
+	BombShopTripBusy = false
+
+	if not DidWork then
+		BombShopRetryAt =
+			os.clock() + 2
+	end
+
+	return DidWork
+end
+
+local function EquipBestBomb()
+	if not AutoEquipBestBomb then
+		return false
+	end
+
+	return RunBombShopTrip()
+end
+
+local function BuyBestAffordableBomb()
+	if not AutoBuyBestBomb then
+		return false
+	end
+
+	return RunBombShopTrip()
+end
+
+--========================================================
+-- UPGRADE MENU
+--========================================================
+
+local function MakeUpgradeToggle(
+	Name,
+	Display
+)
+	UpgradeTab:CreateToggle({
+		name = Display,
+
+		callback = function(Value)
+			UpgradeStates[Name] =
+				Value
+		end,
+	})
+end
+
+MakeUpgradeToggle(
+	"MaxHeldBombs",
+	"Auto Upgrade Max Held Bombs"
+)
+
+MakeUpgradeToggle(
+	"MaxActiveBombs",
+	"Auto Upgrade Max Active Bombs"
+)
+
+MakeUpgradeToggle(
+	"BombExplosionRadius",
+	"Auto Upgrade Explosion Radius"
+)
+
+MakeUpgradeToggle(
+	"CollectionRange",
+	"Auto Upgrade Collection Range"
+)
+
+UpgradeTab:CreateToggle({
+	name = "Auto Upgrade Mine Luck",
+
+	callback = function(Value)
+		AutoMineLuck = Value
+	end,
+})
+
+UpgradeTab:CreateToggle({
+	name = "Auto Buy Next Area",
+
+	callback = function(Value)
+		AutoBuyArea = Value
+	end,
+})
+
+UpgradeTab:CreateToggle({
+	name = "Auto Buy Best TNT",
+
+	callback = function(Value)
+		AutoBuyBestBomb = Value
+		BombShopRetryAt = 0
+
+		if Value then
+			task.spawn(function()
+				task.wait(0.1)
+				RunBombShopTrip()
+			end)
+		end
+	end,
+})
+
+UpgradeTab:CreateToggle({
+	name = "Auto Equip Best TNT",
+
+	callback = function(Value)
+		AutoEquipBestBomb = Value
+		BombShopRetryAt = 0
+
+		if Value then
+			task.spawn(function()
+				task.wait(0.1)
+				RunBombShopTrip()
+			end)
+		end
+	end,
+})
+
+--========================================================
+-- MAIN MENU
+--========================================================
+
+MainTab:CreateToggle({
+	name = "Auto Farm | Place + Ignite",
+
+	callback = function(Value)
+		AutoFarm = Value
+		FarmBusy = false
+		RejectStreak = 0
+
+		if Value then
+			ClearReservations()
+			table.clear(PendingBombs)
+
+			task.spawn(
+				ReturnToMineIfNeeded
+			)
+		end
+	end,
+})
+
+MainTab:CreateToggle({
+	name = "Auto Refill",
+
+	callback = function(Value)
+		AutoRefill = Value
+	end,
+})
+
+MainTab:CreateToggle({
+	name = "Auto Collect",
+
+	callback = function(Value)
+		AutoCollect = Value
+		CollectBusy = false
+	end,
+})
+
+MainTab:CreateToggle({
+	name = "Auto Sell Blocks",
+
+	callback = function(Value)
+		AutoSell = Value
+		LastSell = 0
+	end,
+})
+
+MainTab:CreateToggle({
+	name = "Auto Rebirth | 5s",
+
+	callback = function(Value)
+		AutoRebirth = Value
+		LastRebirth = 0
+	end,
+})
+
+MainTab:CreateToggle({
+	name = "Void Recovery",
+
+	callback = function(Value)
+		AutoVoidRecovery = Value
+	end,
+})
+
+--========================================================
+-- FARM LOOP
+--========================================================
+
+task.spawn(function()
+	while true do
+		if AutoFarm then
+			if not IsInMine()
+				and not RefillBusy
+				and not RebirthBusy
+				and not MineReturnBusy
+				and not BombShopBusy
+				and not BombShopTripBusy
+				and not AreaPurchaseBusy then
+
+				ReturnToMineIfNeeded()
+			end
+
+			if IsInMine()
+				and not BombShopBusy
+				and not BombShopTripBusy
+				and not AreaPurchaseBusy then
+
+				FarmTick()
+			end
+
+			task.wait(FARM_DELAY)
+
+		else
+			task.wait(0.2)
+		end
+	end
+end)
+
+--========================================================
+-- COLLECT LOOP
+--========================================================
+
+task.spawn(function()
+	while true do
+		if AutoCollect then
+			CollectEverything()
+
+			task.wait(
+				COLLECT_LOOP_DELAY
+			)
+
+		else
+			task.wait(0.25)
+		end
+	end
+end)
+
+--========================================================
+-- SELL LOOP
+--========================================================
+
+task.spawn(function()
+	while true do
+		if AutoSell
+			and not RefillBusy
+			and not RebirthBusy
+			and not BombShopBusy
+			and not BombShopTripBusy then
+
+			local Now =
+				os.clock()
+
+			if Now - LastSell
+				>= SELL_INTERVAL then
+
+				LastSell = Now
+
+				SellBlocks()
+			end
+		end
+
+		task.wait(0.25)
+	end
+end)
+
+--========================================================
+-- REBIRTH LOOP
+--========================================================
+
+task.spawn(function()
+	while true do
+		if AutoRebirth
+			and not RefillBusy
+			and not BombShopBusy
+			and not BombShopTripBusy then
+
+			local Now =
+				os.clock()
+
+			if Now - LastRebirth
+				>= REBIRTH_INTERVAL then
+
+				LastRebirth = Now
+
+				PerformRebirth()
+			end
+		end
+
+		task.wait(0.25)
+	end
+end)
+
+--========================================================
+-- NORMAL UPGRADE LOOP
+--========================================================
+
+task.spawn(function()
+	while true do
+		if not FarmBusy
+			and not RefillBusy
+			and not RebirthBusy
+			and not MineReturnBusy
+			and not BombShopBusy
+			and not BombShopTripBusy then
+
+			for Name, Enabled
+				in pairs(UpgradeStates) do
+
+				if Enabled then
+					BuyUpgrade(Name)
+
+					task.wait(0.1)
+				end
+			end
+		end
+
+		task.wait(
+			UPGRADE_DELAY
+		)
+	end
+end)
+
+--========================================================
+-- MINE LUCK LOOP
+--========================================================
+
+task.spawn(function()
+	while true do
+		if AutoMineLuck
+			and not FarmBusy
+			and not RefillBusy
+			and not RebirthBusy
+			and not MineReturnBusy
+			and not BombShopBusy
+			and not BombShopTripBusy then
+
+			BuyMineLuck()
+		end
+
+		task.wait(
+			MINE_LUCK_DELAY
+		)
+	end
+end)
+
+--========================================================
+-- AREA PURCHASE LOOP
+--========================================================
+
+task.spawn(function()
+	while true do
+		if AutoBuyArea
+			and not AreaPurchaseBusy
+			and not RefillBusy
+			and not RebirthBusy
+			and not BombShopBusy
+			and not BombShopTripBusy
+			and not MineReturnBusy then
+
+			PurchaseNextArea()
+		end
+
+		task.wait(
+			AREA_BUY_DELAY
+		)
+	end
+end)
+
+--========================================================
+-- BEST TNT LOOP
+--========================================================
+
+task.spawn(function()
+	while true do
+		if not BombShopTripBusy
+			and not BombShopBusy
+			and not RefillBusy
+			and not RebirthBusy
+			and not AreaPurchaseBusy
+			and not MineReturnBusy then
+
+			if AutoBuyBestBomb
+				or AutoEquipBestBomb then
+
+				local Affordable =
+					AutoBuyBestBomb
+					and GetBestAffordableUnownedBomb()
+					or nil
+
+				local Best =
+					AutoEquipBestBomb
+					and GetBestOwnedBomb()
+					or nil
+
+				local NeedsEquip =
+					Best
+					and SafeRawGet(
+						Session,
+						"EquippedBomb"
+					) ~= Best.Name
+
+				if Affordable
+					or NeedsEquip then
+
+					RunBombShopTrip()
+				end
+			end
+		end
+
+		task.wait(
+			BOMB_SHOP_DELAY
+		)
+	end
+end)
+
+--========================================================
+-- FARM WATCHDOG
+--========================================================
+
+task.spawn(function()
+	while true do
+		if AutoFarm
+			and not RefillBusy
+			and not RebirthBusy
+			and not BombShopTripBusy
+			and not AreaPurchaseBusy then
+
+			-- With bombs available and no active TNT, several
+			-- seconds without a successful place/ignite means
+			-- the local farm state is stale.
+			local Held =
+				tonumber(
+					SafeRawGet(
+						Session,
+						"HeldBombs"
+					)
+				) or 0
+
+			if Held > 0
+				and EffectiveActiveCount() == 0
+				and os.clock() - LastFarmProgress > 3 then
+
+				RecoverFarmState()
+			end
+		end
+
+		task.wait(0.5)
+	end
+end)
+
+--========================================================
+-- VOID WATCHDOG
+--========================================================
+
+task.spawn(function()
+	while true do
+		if AutoVoidRecovery then
+			RecoverFromVoid()
+		end
+
+		task.wait(0.1)
+	end
+end)
