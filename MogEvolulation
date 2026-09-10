@@ -1,0 +1,97 @@
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+
+local Window = Rayfield:CreateWindow({
+    name = "MogEvolulation",
+    subtitle = "ScriptsRBX.com",
+    sidebarLayout = true,
+})
+
+local MainTab = Window:CreateTab({
+    name = "Main"
+})
+
+local AutoClick = false
+local AutoRebirth = false
+local AutoWin = false
+
+-- Auto Click
+MainTab:CreateToggle({
+    name = "Auto Click",
+    callback = function(value)
+        AutoClick = value
+
+        if value then
+            task.spawn(function()
+                while AutoClick do
+                    local Event = ReplicatedStorage
+                        :WaitForChild("PowerRemotes")
+                        :WaitForChild("ClickPower")
+
+                    Event:FireServer()
+
+                    task.wait(0.05)
+                end
+            end)
+        end
+    end,
+})
+
+-- Auto Rebirth
+MainTab:CreateToggle({
+    name = "Auto Rebirth",
+    callback = function(value)
+        AutoRebirth = value
+
+        if value then
+            task.spawn(function()
+                while AutoRebirth do
+                    local Event = ReplicatedStorage
+                        :WaitForChild("RebirthRemotes")
+                        :WaitForChild("DoRebirth")
+
+                    Event:FireServer()
+
+                    task.wait(0.25)
+                end
+            end)
+        end
+    end,
+})
+
+-- Auto Win
+MainTab:CreateToggle({
+    name = "Auto Win",
+    callback = function(value)
+        AutoWin = value
+
+        if value then
+            task.spawn(function()
+                while AutoWin do
+                    local character = player.Character
+
+                    if character then
+                        local root = character:FindFirstChild("HumanoidRootPart")
+
+                        local winPads = workspace:FindFirstChild("WinPads")
+                        local normal = winPads and winPads:FindFirstChild("Normal")
+                        local pad = normal and normal:FindFirstChild("15")
+                        local hitbox = pad and pad:FindFirstChild("Hitbox")
+
+                        if root and hitbox then
+                            firetouchinterest(root, hitbox, 0)
+                            task.wait()
+                            firetouchinterest(root, hitbox, 1)
+                        end
+                    end
+
+                    task.wait(0.1)
+                end
+            end)
+        end
+    end,
+})
