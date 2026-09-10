@@ -1,0 +1,1697 @@
+--// Services
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Player = Players.LocalPlayer
+
+--// Folders
+local LiveAreaEggs = workspace:WaitForChild("LiveAreaEggs")
+local Plots = workspace:WaitForChild("Plots")
+
+--// Remotes
+local GameRemotes = ReplicatedStorage:WaitForChild("GameRemotes")
+
+local StealEgg = GameRemotes:WaitForChild("StealEgg")
+local StepBoostOffer = GameRemotes:WaitForChild("StepBoostOffer")
+local StepBoostClaim = GameRemotes:WaitForChild("StepBoostClaim")
+
+
+--==================================================
+-- Rayfield Gen2
+--==================================================
+
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
+
+local Window = Rayfield:CreateWindow({
+    name = "Farm Hub",
+    subtitle = "Egg + Step Boost",
+    sidebarLayout = true,
+})
+
+local FarmTab = Window:CreateTab({
+    name = "Farm"
+})
+
+local PlayerTab = Window:CreateTab({
+    name = "Player"
+})
+
+
+--==================================================
+-- Settings
+--==================================================
+
+local SelectedRarity = nil
+
+local AutoFarm = false
+local AutoStepBoost = false
+
+local FarmDelay = 0.75
+local ClaimWait = 2
+
+local DefaultHoldTime = 5
+
+-- Sticky teleport settings
+local NormalLoadTime = 1.25
+local RareLoadTime = 2.25
+local ReTeleportInterval = 0.15
+local SafeHeightOffset = 4
+local FallDistance = 18
+
+local WalkSpeed = 16
+local JumpPower = 50
+
+local LastNoEggNotification = 0
+
+
+--==================================================
+-- Rarity Priority
+--==================================================
+
+local RarityOrder = {
+    "Secret",
+    "Eternal",
+    "Mythic",
+    "Legendary",
+    "Epic",
+    "Rare",
+    "Uncommon",
+    "Common",
+}
+
+local RarityPriority = {}
+
+for index, rarity in ipairs(RarityOrder) do
+    RarityPriority[string.lower(rarity)] = index
+end
+
+
+--==================================================
+-- Notification
+--==================================================
+
+local function notify(title, content, duration)
+
+    pcall(function()
+        Rayfield:Notify({
+            title = tostring(title),
+            content = tostring(content),
+            duration = duration or 3,
+        })
+    end)
+
+end
+
+
+--==================================================
+-- Character
+--==================================================
+
+local function getCharacter()
+
+    return Player.Character
+        or Player.CharacterAdded:Wait()
+
+end
+
+
+local function getHumanoid()
+
+    local character = getCharacter()
+
+    return character:FindFirstChildOfClass("Humanoid")
+        or character:WaitForChild("Humanoid")
+
+end
+
+
+local function getRootPart()
+
+    local character = getCharacter()
+
+    return character:FindFirstChild("HumanoidRootPart")
+        or character:WaitForChild("HumanoidRootPart")
+
+end
+
+
+--==================================================
+-- Movement
+--==================================================
+
+local function applyMovement()
+
+    local humanoid = getHumanoid()
+
+    humanoid.WalkSpeed = WalkSpeed
+
+    pcall(function()
+        humanoid.UseJumpPower = true
+    end)
+
+    humanoid.JumpPower = JumpPower
+end
+
+
+Player.CharacterAdded:Connect(function()
+
+    task.wait(0.5)
+
+    applyMovement()
+
+end)
+
+
+--==================================================
+-- Target CFrame
+--==================================================
+
+local function getObjectCFrame(object)
+
+    if not object or not object.Parent then
+        return nil
+    end
+
+    if object:IsA("Model") then
+        return object:GetPivot()
+    end
+
+    if object:IsA("BasePart") then
+        return object.CFrame
+    end
+
+    local part = object:FindFirstChildWhichIsA(
+        "BasePart",
+        true
+    )
+
+    if part then
+        return part.CFrame
+    end
+
+    return nil
+end
+
+
+--==================================================
+-- Normal Teleport
+--==================================================
+
+local function teleport(object)
+
+    local cf = getObjectCFrame(object)
+
+    if not cf then
+        return false
+    end
+
+    local character = getCharacter()
+    local root = getRootPart()
+
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+
+    character:PivotTo(
+        cf * CFrame.new(0, SafeHeightOffset, 0)
+    )
+
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+
+    return true
+end
+
+
+--==================================================
+-- Sticky / Safe Teleport
+--==================================================
+
+local function getLoadTimeForRarity(rarity)
+
+    rarity = string.lower(
+        tostring(rarity or "")
+    )
+
+    if rarity == "secret"
+    or rarity == "eternal"
+    or rarity == "mythic" then
+
+        return RareLoadTime
+    end
+
+    return NormalLoadTime
+end
+
+
+local function safeTeleportAndLoad(object, rarity)
+
+    if not object or not object.Parent then
+        return false
+    end
+
+    local character = getCharacter()
+    local root = getRootPart()
+
+    local loadTime =
+        getLoadTimeForRarity(rarity)
+
+    local started = tick()
+
+
+    while tick() - started < loadTime do
+
+        if not object.Parent then
+            return false
+        end
+
+
+        local targetCF =
+            getObjectCFrame(object)
+
+        if not targetCF then
+
+            task.wait(
+                ReTeleportInterval
+            )
+
+            continue
+        end
+
+
+        local targetPosition =
+            targetCF.Position
+
+
+        -- Kill falling velocity
+        root.AssemblyLinearVelocity =
+            Vector3.zero
+
+        root.AssemblyAngularVelocity =
+            Vector3.zero
+
+
+        -- Re-teleport continuously while target loads
+        character:PivotTo(
+            targetCF
+            * CFrame.new(
+                0,
+                SafeHeightOffset,
+                0
+            )
+        )
+
+
+        root.AssemblyLinearVelocity =
+            Vector3.zero
+
+        root.AssemblyAngularVelocity =
+            Vector3.zero
+
+
+        task.wait(
+            ReTeleportInterval
+        )
+
+
+        -- Safety check:
+        -- if character somehow falls under the target,
+        -- put them back immediately.
+        if root.Position.Y
+            < targetPosition.Y - FallDistance then
+
+            character:PivotTo(
+                targetCF
+                * CFrame.new(
+                    0,
+                    SafeHeightOffset,
+                    0
+                )
+            )
+
+
+            root.AssemblyLinearVelocity =
+                Vector3.zero
+        end
+
+    end
+
+
+    -- Final teleport after streaming/loading
+    return teleport(object)
+end
+
+
+--==================================================
+-- Find Player Plot
+--==================================================
+
+local function getMyPlot()
+
+    for _, plot in ipairs(
+        Plots:GetChildren()
+    ) do
+
+        for attributeName, value in pairs(
+            plot:GetAttributes()
+        ) do
+
+            local name =
+                string.lower(
+                    attributeName
+                )
+
+
+            if name == "owneruserid"
+            or name == "userid"
+            or name == "ownerid" then
+
+                if tonumber(value)
+                    == Player.UserId then
+
+                    return plot
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+
+--==================================================
+-- Egg Detection
+--==================================================
+
+local function isEggModel(egg)
+
+    if not egg:IsA("Model") then
+        return false
+    end
+
+
+    if egg.Parent ~= LiveAreaEggs then
+        return false
+    end
+
+
+    if egg:GetAttribute("Rarity")
+        == nil then
+
+        return false
+    end
+
+
+    if egg:GetAttribute("PlotPet")
+        == true then
+
+        return false
+    end
+
+
+    return true
+end
+
+
+local function isAvailableEgg(egg)
+
+    if not isEggModel(egg) then
+        return false
+    end
+
+
+    if egg:GetAttribute("CarriedBy")
+        ~= nil then
+
+        return false
+    end
+
+
+    return true
+end
+
+
+--==================================================
+-- Available Counts
+--==================================================
+
+local function getAvailableCounts()
+
+    local counts = {}
+
+
+    for _, egg in ipairs(
+        LiveAreaEggs:GetChildren()
+    ) do
+
+        if isAvailableEgg(egg) then
+
+            local rarity =
+                tostring(
+                    egg:GetAttribute(
+                        "Rarity"
+                    )
+                )
+
+
+            counts[rarity] =
+                (counts[rarity] or 0)
+                + 1
+        end
+    end
+
+
+    return counts
+end
+
+
+--==================================================
+-- Available Text
+--==================================================
+
+local function getAvailableText()
+
+    local counts =
+        getAvailableCounts()
+
+    local output = {}
+    local added = {}
+
+
+    for _, rarity in ipairs(
+        RarityOrder
+    ) do
+
+        for actualRarity, count
+        in pairs(counts) do
+
+            if string.lower(
+                actualRarity
+            ) == string.lower(
+                rarity
+            ) then
+
+                table.insert(
+                    output,
+                    actualRarity
+                    .. ": "
+                    .. tostring(count)
+                )
+
+
+                added[
+                    string.lower(
+                        actualRarity
+                    )
+                ] = true
+
+            end
+        end
+    end
+
+
+    local extras = {}
+
+
+    for rarity, count
+    in pairs(counts) do
+
+        if not added[
+            string.lower(rarity)
+        ] then
+
+            table.insert(
+                extras,
+                {
+                    rarity = rarity,
+                    count = count,
+                }
+            )
+
+        end
+    end
+
+
+    table.sort(
+        extras,
+        function(a, b)
+
+            return a.rarity
+                < b.rarity
+
+        end
+    )
+
+
+    for _, info
+    in ipairs(extras) do
+
+        table.insert(
+            output,
+            info.rarity
+            .. ": "
+            .. tostring(info.count)
+        )
+
+    end
+
+
+    if #output == 0 then
+        return "No available eggs"
+    end
+
+
+    return table.concat(
+        output,
+        "\n"
+    )
+end
+
+
+--==================================================
+-- Get Rarities
+--==================================================
+
+local function getRarities()
+
+    local found = {}
+    local list = {}
+
+
+    for _, egg in ipairs(
+        LiveAreaEggs:GetChildren()
+    ) do
+
+        if egg:IsA("Model") then
+
+            local rarity =
+                egg:GetAttribute(
+                    "Rarity"
+                )
+
+
+            if rarity ~= nil then
+
+                rarity =
+                    tostring(rarity)
+
+                local key =
+                    string.lower(rarity)
+
+
+                if not found[key] then
+
+                    found[key] = true
+
+                    table.insert(
+                        list,
+                        rarity
+                    )
+
+                end
+            end
+        end
+    end
+
+
+    table.sort(
+        list,
+        function(a, b)
+
+            local pa =
+                RarityPriority[
+                    string.lower(a)
+                ] or 999
+
+            local pb =
+                RarityPriority[
+                    string.lower(b)
+                ] or 999
+
+
+            if pa == pb then
+                return a < b
+            end
+
+
+            return pa < pb
+        end
+    )
+
+
+    return list
+end
+
+
+local Rarities =
+    getRarities()
+
+
+if #Rarities > 0 then
+    SelectedRarity =
+        Rarities[1]
+end
+
+
+--==================================================
+-- Available Eggs UI
+--==================================================
+
+local AvailableEggsText =
+    FarmTab:CreateText({
+        name = "Available Eggs",
+        text = getAvailableText(),
+    })
+
+
+local function refreshAvailableEggs()
+
+    pcall(function()
+
+        AvailableEggsText:Set(
+            getAvailableText()
+        )
+
+    end)
+
+end
+
+
+--==================================================
+-- Find Selected Egg
+--==================================================
+
+local function findEgg()
+
+    if not SelectedRarity then
+        return nil
+    end
+
+
+    local wanted =
+        string.lower(
+            tostring(
+                SelectedRarity
+            )
+        )
+
+
+    for _, egg in ipairs(
+        LiveAreaEggs:GetChildren()
+    ) do
+
+        if isAvailableEgg(egg) then
+
+            local rarity =
+                tostring(
+                    egg:GetAttribute(
+                        "Rarity"
+                    )
+                )
+
+
+            if string.lower(rarity)
+                == wanted then
+
+                return egg
+
+            end
+        end
+    end
+
+
+    return nil
+end
+
+
+--==================================================
+-- Find Prompt
+--==================================================
+
+local function findEggPrompt(egg)
+
+    -- Search egg descendants first
+    for _, object in ipairs(
+        egg:GetDescendants()
+    ) do
+
+        if object:IsA(
+            "ProximityPrompt"
+        ) then
+
+            local action =
+                string.lower(
+                    tostring(
+                        object.ActionText
+                    )
+                )
+
+
+            if object.Name
+                == "CarryAreaEgg"
+            or string.find(
+                action,
+                "steal"
+            ) then
+
+                return object
+
+            end
+        end
+    end
+
+
+    -- Smart prompt may be elsewhere.
+    local targetCF =
+        getObjectCFrame(egg)
+
+    if not targetCF then
+        return nil
+    end
+
+
+    local eggPosition =
+        targetCF.Position
+
+    local closestPrompt = nil
+    local closestDistance =
+        math.huge
+
+
+    for _, object in ipairs(
+        workspace:GetDescendants()
+    ) do
+
+        if object:IsA(
+            "ProximityPrompt"
+        ) then
+
+            local action =
+                string.lower(
+                    tostring(
+                        object.ActionText
+                    )
+                )
+
+
+            if object.Name
+                == "CarryAreaEgg"
+            or string.find(
+                action,
+                "steal"
+            ) then
+
+                local parent =
+                    object.Parent
+
+                local part = nil
+
+
+                if parent then
+
+                    if parent:IsA(
+                        "BasePart"
+                    ) then
+
+                        part = parent
+
+                    elseif parent:IsA(
+                        "Attachment"
+                    )
+                    and parent.Parent
+                    and parent.Parent:IsA(
+                        "BasePart"
+                    ) then
+
+                        part =
+                            parent.Parent
+                    end
+                end
+
+
+                if part then
+
+                    local distance =
+                        (
+                            part.Position
+                            - eggPosition
+                        ).Magnitude
+
+
+                    if distance
+                        < closestDistance then
+
+                        closestDistance =
+                            distance
+
+                        closestPrompt =
+                            object
+
+                    end
+                end
+            end
+        end
+    end
+
+
+    if closestPrompt
+    and closestDistance <= 15 then
+
+        return closestPrompt
+    end
+
+
+    return nil
+end
+
+
+--==================================================
+-- Wait For Prompt To Load
+--==================================================
+
+local function waitForEggPrompt(
+    egg,
+    timeout
+)
+
+    local started = tick()
+
+
+    repeat
+
+        local prompt =
+            findEggPrompt(egg)
+
+        if prompt then
+            return prompt
+        end
+
+
+        -- Keep us at the egg while prompt loads
+        teleport(egg)
+
+        task.wait(0.15)
+
+
+    until tick() - started
+        >= timeout
+
+
+    return nil
+end
+
+
+--==================================================
+-- Hold Time
+--==================================================
+
+local function getHoldTime(prompt)
+
+    if prompt then
+
+        local duration =
+            tonumber(
+                prompt.HoldDuration
+            )
+
+
+        if duration
+        and duration > 0 then
+
+            return duration
+        end
+    end
+
+
+    return DefaultHoldTime
+end
+
+
+--==================================================
+-- Claim Egg
+--==================================================
+
+local function claimEgg()
+
+    local egg = findEgg()
+
+
+    if not egg then
+
+        if tick()
+            - LastNoEggNotification
+            > 4 then
+
+            LastNoEggNotification =
+                tick()
+
+
+            notify(
+                "No Egg Available",
+                "No "
+                .. tostring(
+                    SelectedRarity
+                )
+                .. " egg is available.\n\n"
+                .. getAvailableText(),
+                4
+            )
+
+        end
+
+
+        return false
+    end
+
+
+    local plot =
+        getMyPlot()
+
+
+    if not plot then
+
+        notify(
+            "Plot Not Found",
+            "Could not find your plot.",
+            3
+        )
+
+        return false
+    end
+
+
+    local eggName =
+        egg.Name
+
+    local rarity =
+        tostring(
+            egg:GetAttribute(
+                "Rarity"
+            )
+        )
+
+
+    --==================================================
+    -- Sticky TP + load
+    --==================================================
+
+    notify(
+        "Loading Egg",
+        eggName
+        .. " ["
+        .. rarity
+        .. "]",
+        2
+    )
+
+
+    local loaded =
+        safeTeleportAndLoad(
+            egg,
+            rarity
+        )
+
+
+    if not loaded then
+
+        notify(
+            "Teleport Failed",
+            "Could not load "
+            .. eggName,
+            3
+        )
+
+        return false
+    end
+
+
+    if not egg.Parent then
+
+        teleport(plot)
+
+        return false
+    end
+
+
+    --==================================================
+    -- Wait For Prompt
+    --==================================================
+
+    local prompt =
+        waitForEggPrompt(
+            egg,
+            2.5
+        )
+
+
+    local holdTime =
+        getHoldTime(prompt)
+
+
+    notify(
+        "Stealing Egg",
+        eggName
+        .. "\nHold: "
+        .. string.format(
+            "%.1f",
+            holdTime
+        )
+        .. "s",
+        math.max(
+            2,
+            holdTime
+        )
+    )
+
+
+    --==================================================
+    -- Prompt Hold
+    --==================================================
+
+    if prompt then
+
+        pcall(function()
+            prompt:InputHoldBegin()
+        end)
+
+
+        local holdStarted =
+            tick()
+
+
+        while tick()
+            - holdStarted
+            < holdTime + 0.15 do
+
+            if not egg.Parent then
+                break
+            end
+
+
+            -- Keep character at target
+            -- during long Secret/etc prompt.
+            local targetCF =
+                getObjectCFrame(egg)
+
+            local root =
+                getRootPart()
+
+
+            if targetCF then
+
+                local distance =
+                    (
+                        root.Position
+                        - targetCF.Position
+                    ).Magnitude
+
+
+                if distance > 9
+                or root.Position.Y
+                    < targetCF.Position.Y
+                    - FallDistance then
+
+                    teleport(egg)
+
+                end
+            end
+
+
+            root.AssemblyLinearVelocity =
+                Vector3.zero
+
+
+            task.wait(0.1)
+        end
+
+
+        pcall(function()
+            prompt:InputHoldEnd()
+        end)
+
+    else
+
+        -- Prompt wasn't found.
+        -- Stay at egg for fallback hold.
+        local started =
+            tick()
+
+
+        while tick() - started
+            < holdTime do
+
+            if not egg.Parent then
+                break
+            end
+
+
+            teleport(egg)
+
+            task.wait(0.15)
+        end
+
+    end
+
+
+    --==================================================
+    -- Direct Remote Fallback
+    --==================================================
+
+    if egg.Parent then
+
+        local held =
+            tostring(
+                Player:GetAttribute(
+                    "HeldEggUid"
+                )
+                or ""
+            )
+
+
+        if held == "" then
+
+            local eggUid =
+                egg:GetAttribute(
+                    "EggUid"
+                )
+
+
+            if eggUid ~= nil then
+
+                StealEgg:FireServer(
+                    egg,
+                    eggUid
+                )
+
+            end
+        end
+    end
+
+
+    --==================================================
+    -- Confirmation
+    --==================================================
+
+    local started =
+        tick()
+
+    local success =
+        false
+
+
+    repeat
+
+        task.wait(0.05)
+
+
+        local held =
+            tostring(
+                Player:GetAttribute(
+                    "HeldEggUid"
+                )
+                or ""
+            )
+
+
+        if held ~= "" then
+
+            success = true
+            break
+
+        end
+
+
+        if not egg.Parent then
+
+            success = true
+            break
+
+        end
+
+
+        if egg:GetAttribute(
+            "CarriedBy"
+        ) ~= nil then
+
+            success = true
+            break
+
+        end
+
+
+    until tick() - started
+        > ClaimWait
+
+
+    --==================================================
+    -- Safe return
+    --==================================================
+
+    safeTeleportAndLoad(
+        plot,
+        "Common"
+    )
+
+
+    if success then
+
+        notify(
+            "Egg Claimed",
+            eggName
+            .. " ["
+            .. rarity
+            .. "]\nReturned to plot.",
+            2
+        )
+
+    else
+
+        notify(
+            "Claim Timed Out",
+            eggName
+            .. " did not confirm.",
+            3
+        )
+
+    end
+
+
+    refreshAvailableEggs()
+
+    return success
+end
+
+
+--==================================================
+-- Select Rarity
+--==================================================
+
+FarmTab:CreateDropdown({
+    name = "Select Rarity",
+
+    options = Rarities,
+
+    currentOption = SelectedRarity,
+
+    callback = function(value)
+
+        if typeof(value)
+            == "table" then
+
+            value = value[1]
+        end
+
+
+        if not value then
+            return
+        end
+
+
+        SelectedRarity =
+            tostring(value)
+
+
+        local counts =
+            getAvailableCounts()
+
+        local amount = 0
+
+
+        for rarity, count
+        in pairs(counts) do
+
+            if string.lower(rarity)
+                == string.lower(
+                    SelectedRarity
+                ) then
+
+                amount = count
+                break
+            end
+        end
+
+
+        notify(
+            "Rarity Selected",
+            SelectedRarity
+            .. "\nAvailable: "
+            .. tostring(amount),
+            2
+        )
+
+    end
+})
+
+
+--==================================================
+-- Refresh
+--==================================================
+
+FarmTab:CreateButton({
+    name = "Refresh Available Eggs",
+
+    callback = function()
+
+        refreshAvailableEggs()
+
+        notify(
+            "Available Eggs",
+            getAvailableText(),
+            5
+        )
+
+    end
+})
+
+
+--==================================================
+-- Teleport + Claim
+--==================================================
+
+FarmTab:CreateButton({
+    name = "Teleport + Claim",
+
+    description =
+        "Loads target, re-teleports if needed, claims, then returns.",
+
+    callback = function()
+
+        task.spawn(function()
+            claimEgg()
+        end)
+
+    end
+})
+
+
+--==================================================
+-- Teleport To Plot
+--==================================================
+
+FarmTab:CreateButton({
+    name = "Teleport to Plot",
+
+    callback = function()
+
+        local plot =
+            getMyPlot()
+
+
+        if not plot then
+
+            notify(
+                "Plot Not Found",
+                "Could not find your plot.",
+                3
+            )
+
+            return
+        end
+
+
+        safeTeleportAndLoad(
+            plot,
+            "Common"
+        )
+
+    end
+})
+
+
+--==================================================
+-- Auto Farm
+--==================================================
+
+FarmTab:CreateToggle({
+    name = "Auto Farm Selected Rarity",
+
+    value = false,
+
+    callback = function(value)
+
+        AutoFarm = value
+
+
+        notify(
+            "Auto Farm",
+            value
+                and (
+                    "Enabled\nTarget: "
+                    .. tostring(
+                        SelectedRarity
+                    )
+                )
+                or "Disabled",
+            2
+        )
+
+
+        if not value then
+            return
+        end
+
+
+        task.spawn(function()
+
+            while AutoFarm do
+
+                local held =
+                    tostring(
+                        Player:GetAttribute(
+                            "HeldEggUid"
+                        )
+                        or ""
+                    )
+
+
+                if held == "" then
+
+                    claimEgg()
+
+                else
+
+                    local plot =
+                        getMyPlot()
+
+                    if plot then
+
+                        safeTeleportAndLoad(
+                            plot,
+                            "Common"
+                        )
+
+                    end
+                end
+
+
+                task.wait(
+                    FarmDelay
+                )
+            end
+
+        end)
+
+    end
+})
+
+
+--==================================================
+-- Auto Step Boost
+--==================================================
+
+FarmTab:CreateToggle({
+    name = "Auto Claim Step Boost",
+
+    value = false,
+
+    callback = function(value)
+
+        AutoStepBoost =
+            value
+
+    end
+})
+
+
+StepBoostOffer.OnClientEvent:Connect(
+    function(
+        offerId,
+        multiplier
+    )
+
+        if not AutoStepBoost then
+            return
+        end
+
+
+        if not offerId then
+            return
+        end
+
+
+        if Player:GetAttribute(
+            "OnTreadmill"
+        ) ~= true then
+
+            return
+        end
+
+
+        StepBoostClaim:FireServer(
+            tostring(
+                offerId
+            )
+        )
+
+    end
+)
+
+
+--==================================================
+-- WalkSpeed
+--==================================================
+
+PlayerTab:CreateSlider({
+    name = "WalkSpeed",
+
+    range = {
+        0,
+        350
+    },
+
+    increment = 1,
+
+    value = 16,
+
+    callback = function(value)
+
+        WalkSpeed =
+            value
+
+
+        local humanoid =
+            getHumanoid()
+
+
+        humanoid.WalkSpeed =
+            value
+
+    end
+})
+
+
+--==================================================
+-- JumpPower
+--==================================================
+
+PlayerTab:CreateSlider({
+    name = "JumpPower",
+
+    range = {
+        0,
+        200
+    },
+
+    increment = 1,
+
+    value = 50,
+
+    callback = function(value)
+
+        JumpPower =
+            value
+
+
+        local humanoid =
+            getHumanoid()
+
+
+        pcall(function()
+            humanoid.UseJumpPower =
+                true
+        end)
+
+
+        humanoid.JumpPower =
+            value
+
+    end
+})
+
+
+--==================================================
+-- Reset Movement
+--==================================================
+
+PlayerTab:CreateButton({
+    name = "Reset Movement",
+
+    callback = function()
+
+        WalkSpeed = 16
+        JumpPower = 50
+
+        applyMovement()
+
+    end
+})
+
+
+--==================================================
+-- Refresh Eggs
+--==================================================
+
+LiveAreaEggs.ChildAdded:Connect(
+    function()
+
+        task.wait(0.1)
+
+        refreshAvailableEggs()
+
+    end
+)
+
+
+LiveAreaEggs.ChildRemoved:Connect(
+    function()
+
+        task.wait(0.1)
+
+        refreshAvailableEggs()
+
+    end
+)
+
+
+task.spawn(function()
+
+    while task.wait(1) do
+
+        refreshAvailableEggs()
+
+    end
+
+end)
+
+
+--==================================================
+-- Startup
+--==================================================
+
+task.delay(1, function()
+
+    applyMovement()
+
+    refreshAvailableEggs()
+
+
+    notify(
+        "Farm Hub Loaded",
+        "Selected: "
+        .. tostring(
+            SelectedRarity
+            or "None"
+        ),
+        3
+    )
+
+end)
