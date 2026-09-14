@@ -1,0 +1,1256 @@
+--------------------------------------------------
+-- SERVICES
+--------------------------------------------------
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+
+local Player = Players.LocalPlayer
+local PlayerGui = Player:WaitForChild("PlayerGui")
+
+--------------------------------------------------
+-- FARM STATE
+--------------------------------------------------
+
+local SelectedEnemy = nil
+local CurrentTarget = nil
+local AutoFarm = false
+
+--------------------------------------------------
+-- NUMBER PARSER
+--------------------------------------------------
+
+local function ParseNumber(text)
+    if not text then
+        return nil
+    end
+
+    text = text:gsub(",", ""):gsub("%s+", "")
+
+    local number, suffix =
+        text:match("^([%d%.]+)([KMBT]?)$")
+
+    number = tonumber(number)
+
+    if not number then
+        return nil
+    end
+
+    local multipliers = {
+        K = 1e3,
+        M = 1e6,
+        B = 1e9,
+        T = 1e12,
+    }
+
+    if suffix ~= "" then
+        number = number * multipliers[suffix]
+    end
+
+    return number
+end
+
+--------------------------------------------------
+-- HEALTH
+--------------------------------------------------
+
+local function GetHealthFromBillboard(billboard)
+    if not billboard then
+        return nil, nil
+    end
+
+    local bar =
+        billboard:FindFirstChild("Bar")
+
+    local amount =
+        bar and bar:FindFirstChild("Amount")
+
+    if not amount
+        or not amount:IsA("TextLabel")
+    then
+        return nil, nil
+    end
+
+    local currentText, maxText =
+        amount.Text:match(
+            "^%s*(.-)%s*/%s*(.-)%s*$"
+        )
+
+    if not currentText
+        or not maxText
+    then
+        return nil, nil
+    end
+
+    return
+        ParseNumber(currentText),
+        ParseNumber(maxText)
+end
+
+--------------------------------------------------
+-- ENEMY FOLDER
+--------------------------------------------------
+
+local function GetEnemyFolder()
+    local enemies =
+        workspace:FindFirstChild("_ENEMIES")
+
+    return enemies
+        and enemies:FindFirstChild("Client")
+end
+
+--------------------------------------------------
+-- FIND ENEMIES
+--------------------------------------------------
+
+local function GetEnemies()
+    local results = {}
+
+    local enemyFolder =
+        GetEnemyFolder()
+
+    if not enemyFolder then
+        return results
+    end
+
+    for _, gui in ipairs(
+        PlayerGui:GetDescendants()
+    ) do
+
+        if gui:IsA("BillboardGui")
+            and gui.Name == "EnemyBillboard"
+            and gui.Adornee
+        then
+
+            local title =
+                gui:FindFirstChild("Title")
+
+            local model =
+                gui.Adornee
+                    :FindFirstAncestorOfClass(
+                        "Model"
+                    )
+
+            if title
+                and title:IsA("TextLabel")
+                and model
+                and model:IsDescendantOf(
+                    enemyFolder
+                )
+            then
+
+                local hp, maxHp =
+                    GetHealthFromBillboard(gui)
+
+                table.insert(
+                    results,
+                    {
+                        Name = title.Text,
+                        Model = model,
+                        Root = gui.Adornee,
+                        Billboard = gui,
+                        Health = hp,
+                        MaxHealth = maxHp,
+                    }
+                )
+            end
+        end
+    end
+
+    return results
+end
+
+--------------------------------------------------
+-- ENEMY TYPES
+--------------------------------------------------
+
+local function GetEnemyTypes()
+    local seen = {}
+    local list = {}
+
+    for _, enemy in ipairs(
+        GetEnemies()
+    ) do
+
+        if enemy.Name ~= ""
+            and not seen[enemy.Name]
+        then
+
+            seen[enemy.Name] = true
+            table.insert(
+                list,
+                enemy.Name
+            )
+        end
+    end
+
+    table.sort(list)
+
+    return list
+end
+
+--------------------------------------------------
+-- REFRESH LIST
+-- KEEP CURRENT SELECTION
+--------------------------------------------------
+
+local function GetRefreshEnemyTypes()
+    local list =
+        GetEnemyTypes()
+
+    if SelectedEnemy then
+        local exists = false
+
+        for _, name in ipairs(list) do
+            if name == SelectedEnemy then
+                exists = true
+                break
+            end
+        end
+
+        if not exists then
+            table.insert(
+                list,
+                SelectedEnemy
+            )
+
+            table.sort(list)
+        end
+    end
+
+    return list
+end
+
+--------------------------------------------------
+-- TARGET ALIVE
+--------------------------------------------------
+
+local function IsTargetAlive(target)
+    if not target then
+        return false
+    end
+
+    if not target.Model
+        or not target.Model.Parent
+        or not target.Root
+        or not target.Root.Parent
+        or not target.Billboard
+        or not target.Billboard.Parent
+    then
+        return false
+    end
+
+    local hp =
+        GetHealthFromBillboard(
+            target.Billboard
+        )
+
+    return hp ~= nil
+        and hp > 0
+end
+
+--------------------------------------------------
+-- CLOSEST ENEMY
+--------------------------------------------------
+
+local function GetClosestEnemy(enemyName)
+    if not enemyName then
+        return nil
+    end
+
+    local character =
+        Player.Character
+
+    local root =
+        character
+        and character:FindFirstChild(
+            "HumanoidRootPart"
+        )
+
+    if not root then
+        return nil
+    end
+
+    local closest = nil
+    local closestDistance = math.huge
+
+    for _, enemy in ipairs(
+        GetEnemies()
+    ) do
+
+        if enemy.Name == enemyName
+            and enemy.Health
+            and enemy.Health > 0
+            and enemy.Root
+            and enemy.Root.Parent
+        then
+
+            local distance =
+                (
+                    root.Position
+                    - enemy.Root.Position
+                ).Magnitude
+
+            if distance
+                < closestDistance
+            then
+                closestDistance = distance
+                closest = enemy
+            end
+        end
+    end
+
+    return closest
+end
+
+--------------------------------------------------
+-- RAYFIELD
+--------------------------------------------------
+
+local Rayfield = loadstring(
+    game:HttpGet(
+        "https://sirius.menu/gen2"
+    )
+)()
+
+local window =
+    Rayfield:CreateWindow({
+        name = "Dev Auto Farm",
+        subtitle = "Anime Testing",
+        sidebarLayout = true,
+        theme = "default",
+    })
+
+--------------------------------------------------
+-- TABS
+--------------------------------------------------
+
+local FarmTab =
+    window:CreateTab({
+        name = "Farm"
+    })
+
+local GachaTab =
+    window:CreateTab({
+        name = "Gacha"
+    })
+
+local EquipTab =
+    window:CreateTab({
+        name = "Equip Best"
+    })
+
+local UpgradeTab =
+    window:CreateTab({
+        name = "Upgrades"
+    })
+
+local RewardsTab =
+    window:CreateTab({
+        name = "Rewards"
+    })
+
+--------------------------------------------------
+-- FARM DROPDOWN
+--------------------------------------------------
+
+local EnemyDropdown =
+    FarmTab:CreateDropdown({
+
+        name = "Select Enemy",
+
+        description =
+            "Choose enemy to farm",
+
+        options =
+            GetEnemyTypes(),
+
+        placeholder =
+            "Choose Enemy",
+
+        multiSelect = false,
+
+        callback =
+            function(value)
+
+                if not value
+                    or value == ""
+                then
+                    return
+                end
+
+                SelectedEnemy = value
+                CurrentTarget = nil
+
+                print(
+                    "Selected enemy:",
+                    value
+                )
+            end,
+    })
+
+--------------------------------------------------
+-- REFRESH ENEMIES
+--------------------------------------------------
+
+FarmTab:CreateButton({
+
+    name = "Refresh Enemies",
+
+    callback = function()
+
+        local saved =
+            SelectedEnemy
+
+        local list =
+            GetRefreshEnemyTypes()
+
+        EnemyDropdown:Refresh(
+            list
+        )
+
+        if saved then
+            SelectedEnemy = saved
+
+            EnemyDropdown:Set(
+                saved,
+                true
+            )
+        end
+
+        CurrentTarget = nil
+
+        print(
+            "Enemies refreshed:",
+            #list
+        )
+    end,
+})
+
+--------------------------------------------------
+-- AUTO FARM
+--------------------------------------------------
+
+FarmTab:CreateToggle({
+
+    name = "Auto Farm",
+
+    value = false,
+
+    callback =
+        function(value)
+
+            AutoFarm = value
+
+            if not value then
+
+                CurrentTarget = nil
+
+                local character =
+                    Player.Character
+
+                local root =
+                    character
+                    and character:FindFirstChild(
+                        "HumanoidRootPart"
+                    )
+
+                if root then
+                    root.AssemblyLinearVelocity =
+                        Vector3.zero
+
+                    root.AssemblyAngularVelocity =
+                        Vector3.zero
+                end
+            end
+
+        end,
+})
+
+--------------------------------------------------
+-- GACHA STATE
+--------------------------------------------------
+
+local SelectedGachaWorld = "DBZ"
+
+local AutoPetGacha = false
+local AutoRaceSpin = false
+
+--------------------------------------------------
+-- GACHA WORLD DROPDOWN
+--------------------------------------------------
+
+GachaTab:CreateDropdown({
+
+    name = "Gacha World",
+
+    description =
+        "Choose which world's pet gacha to open",
+
+    options = {
+        "DBZ",
+        "AOT",
+        "Naruto",
+        "Nanatsu",
+    },
+
+    value = "DBZ",
+
+    multiSelect = false,
+
+    callback =
+        function(value)
+
+            if not value
+                or value == ""
+            then
+                return
+            end
+
+            SelectedGachaWorld =
+                value
+
+            print(
+                "Selected Gacha:",
+                value
+            )
+
+        end,
+})
+
+--------------------------------------------------
+-- AUTO GACHA
+--------------------------------------------------
+
+GachaTab:CreateToggle({
+
+    name = "Auto Open Pet Gacha",
+
+    value = false,
+
+    callback =
+        function(value)
+
+            AutoPetGacha =
+                value
+
+        end,
+})
+
+--------------------------------------------------
+-- AUTO RACE
+--------------------------------------------------
+
+GachaTab:CreateToggle({
+
+    name = "Auto Spin Race",
+
+    value = false,
+
+    callback =
+        function(value)
+
+            AutoRaceSpin =
+                value
+
+        end,
+})
+
+--------------------------------------------------
+-- EQUIP BEST STATE
+--------------------------------------------------
+
+local AutoBestPet = false
+local AutoBestAvatar = false
+local AutoBestAccessory = false
+local AutoBestWeapon = false
+
+--------------------------------------------------
+-- EQUIP BEST PET
+--------------------------------------------------
+
+EquipTab:CreateToggle({
+
+    name = "Auto Equip Best Pets",
+
+    value = false,
+
+    callback =
+        function(value)
+
+            AutoBestPet =
+                value
+
+        end,
+})
+
+--------------------------------------------------
+-- EQUIP BEST AVATAR
+--------------------------------------------------
+
+EquipTab:CreateToggle({
+
+    name = "Auto Equip Best Avatars",
+
+    value = false,
+
+    callback =
+        function(value)
+
+            AutoBestAvatar =
+                value
+
+        end,
+})
+
+--------------------------------------------------
+-- EQUIP BEST ACCESSORY
+--------------------------------------------------
+
+EquipTab:CreateToggle({
+
+    name = "Auto Equip Best Accessories",
+
+    value = false,
+
+    callback =
+        function(value)
+
+            AutoBestAccessory =
+                value
+
+        end,
+})
+
+--------------------------------------------------
+-- EQUIP BEST WEAPON
+--------------------------------------------------
+
+EquipTab:CreateToggle({
+
+    name = "Auto Equip Best Weapons",
+
+    value = false,
+
+    callback =
+        function(value)
+
+            AutoBestWeapon =
+                value
+
+        end,
+})
+
+--------------------------------------------------
+-- UPGRADE STATE
+--------------------------------------------------
+
+local AutoEnergy = false
+local AutoDamage = false
+local AutoGold = false
+local AutoRange = false
+local AutoRankUp = false
+
+--------------------------------------------------
+-- ENERGY
+--------------------------------------------------
+
+UpgradeTab:CreateToggle({
+
+    name = "Auto Upgrade Energy",
+
+    value = false,
+
+    callback =
+        function(value)
+
+            AutoEnergy =
+                value
+
+        end,
+})
+
+--------------------------------------------------
+-- DAMAGE
+--------------------------------------------------
+
+UpgradeTab:CreateToggle({
+
+    name = "Auto Upgrade Damage",
+
+    value = false,
+
+    callback =
+        function(value)
+
+            AutoDamage =
+                value
+
+        end,
+})
+
+--------------------------------------------------
+-- GOLD
+--------------------------------------------------
+
+UpgradeTab:CreateToggle({
+
+    name = "Auto Upgrade Gold",
+
+    value = false,
+
+    callback =
+        function(value)
+
+            AutoGold =
+                value
+
+        end,
+})
+
+--------------------------------------------------
+-- ATTACK RANGE
+--------------------------------------------------
+
+UpgradeTab:CreateToggle({
+
+    name =
+        "Auto Upgrade Attack Range",
+
+    value = false,
+
+    callback =
+        function(value)
+
+            AutoRange =
+                value
+
+        end,
+})
+
+--------------------------------------------------
+-- AUTO RANK UP
+--------------------------------------------------
+
+UpgradeTab:CreateToggle({
+
+    name = "Auto Rank Up",
+
+    description =
+        "Attempts rank up every 5 seconds",
+
+    value = false,
+
+    callback =
+        function(value)
+
+            AutoRankUp =
+                value
+
+        end,
+})
+
+--------------------------------------------------
+-- REWARD STATE
+--------------------------------------------------
+
+local AutoTimeRewards = false
+local AutoAchievements = false
+
+--------------------------------------------------
+-- TIME REWARDS
+--------------------------------------------------
+
+RewardsTab:CreateToggle({
+
+    name =
+        "Auto Claim Time Rewards",
+
+    value = false,
+
+    callback =
+        function(value)
+
+            AutoTimeRewards =
+                value
+
+        end,
+})
+
+--------------------------------------------------
+-- ACHIEVEMENTS
+--------------------------------------------------
+
+RewardsTab:CreateToggle({
+
+    name =
+        "Auto Claim Achievements",
+
+    value = false,
+
+    callback =
+        function(value)
+
+            AutoAchievements =
+                value
+
+        end,
+})
+
+--------------------------------------------------
+-- BRIDGENET
+--------------------------------------------------
+
+local BridgeFolder =
+    ReplicatedStorage:WaitForChild(
+        "ffrostflame_bridgenet2@1.0.0"
+    )
+
+local Event =
+    BridgeFolder:WaitForChild(
+        "dataRemoteEvent"
+    )
+
+local function FireBridge(data)
+
+    pcall(function()
+
+        Event:FireServer({
+            data,
+            "\x02"
+        })
+
+    end)
+
+end
+
+--------------------------------------------------
+-- AUTO FARM
+-- INSTANT TELEPORT
+--------------------------------------------------
+
+RunService.Heartbeat:Connect(
+    function()
+
+        if not AutoFarm then
+            return
+        end
+
+        --------------------------------------------------
+        -- KEEP REMEMBERING SELECTED MOB TYPE
+        --------------------------------------------------
+
+        if not SelectedEnemy then
+            return
+        end
+
+        local character =
+            Player.Character
+
+        local root =
+            character
+            and character:FindFirstChild(
+                "HumanoidRootPart"
+            )
+
+        if not root then
+            return
+        end
+
+        --------------------------------------------------
+        -- GET ANOTHER NPC ONLY IF CURRENT DIED/GONE
+        --------------------------------------------------
+
+        if not IsTargetAlive(
+            CurrentTarget
+        ) then
+
+            CurrentTarget =
+                GetClosestEnemy(
+                    SelectedEnemy
+                )
+
+        end
+
+        --------------------------------------------------
+        -- WAIT FOR AN NPC OF THAT TYPE
+        --------------------------------------------------
+
+        if not CurrentTarget then
+            return
+        end
+
+        if not CurrentTarget.Root
+            or not CurrentTarget.Root.Parent
+        then
+
+            CurrentTarget =
+                nil
+
+            return
+        end
+
+        --------------------------------------------------
+        -- INSTANT TELEPORT
+        --------------------------------------------------
+
+        root.CFrame =
+            CurrentTarget.Root.CFrame
+            * CFrame.new(
+                0,
+                0,
+                4
+            )
+
+        --------------------------------------------------
+        -- REMOVE MOVEMENT / FALLING JITTER
+        --------------------------------------------------
+
+        root.AssemblyLinearVelocity =
+            Vector3.zero
+
+        root.AssemblyAngularVelocity =
+            Vector3.zero
+
+    end
+)
+
+--------------------------------------------------
+-- RESPAWN
+--------------------------------------------------
+
+Player.CharacterAdded:Connect(
+    function()
+
+        --------------------------------------------------
+        -- DON'T FORGET SELECTED ENEMY
+        --------------------------------------------------
+
+        CurrentTarget =
+            nil
+
+    end
+)
+
+--------------------------------------------------
+-- PET GACHA
+--------------------------------------------------
+
+task.spawn(function()
+
+    while task.wait(0.5) do
+
+        if AutoPetGacha then
+
+            FireBridge({
+                "GachaSystem",
+                "Spin",
+                "Pet",
+                SelectedGachaWorld,
+                {},
+                n = 6
+            })
+
+        end
+
+    end
+end)
+
+--------------------------------------------------
+-- RACE SPIN
+--------------------------------------------------
+
+task.spawn(function()
+
+    while task.wait(0.5) do
+
+        if AutoRaceSpin then
+
+            FireBridge({
+                "GachaSystem",
+                "Spin",
+                "Race",
+                "Default",
+
+                {
+                    Race_Default_6 =
+                        true
+                },
+
+                n = 6
+            })
+
+        end
+
+    end
+end)
+
+--------------------------------------------------
+-- EQUIP BEST
+-- EVERY 10 SECONDS
+--------------------------------------------------
+
+task.spawn(function()
+
+    while task.wait(10) do
+
+        if AutoBestPet then
+
+            FireBridge({
+                "InventorySystem",
+                "EquipBest",
+                "Pet",
+                n = 3
+            })
+
+        end
+
+        if AutoBestAvatar then
+
+            task.wait(0.2)
+
+            FireBridge({
+                "InventorySystem",
+                "EquipBest",
+                "Avatar",
+                n = 3
+            })
+
+        end
+
+        if AutoBestAccessory then
+
+            task.wait(0.2)
+
+            FireBridge({
+                "InventorySystem",
+                "EquipBest",
+                "Accessory",
+                n = 3
+            })
+
+        end
+
+        if AutoBestWeapon then
+
+            task.wait(0.2)
+
+            FireBridge({
+                "InventorySystem",
+                "EquipBest",
+                "Weapon",
+                n = 3
+            })
+
+        end
+
+    end
+end)
+
+--------------------------------------------------
+-- UPGRADES
+--------------------------------------------------
+
+task.spawn(function()
+
+    while task.wait(0.5) do
+
+        if AutoEnergy then
+
+            FireBridge({
+                "UpgradeSystem",
+                "Buy",
+                "Warrior Upgrades",
+                "Energy",
+                n = 4
+            })
+
+        end
+
+        if AutoDamage then
+
+            FireBridge({
+                "UpgradeSystem",
+                "Buy",
+                "Warrior Upgrades",
+                "Damage",
+                n = 4
+            })
+
+        end
+
+        if AutoGold then
+
+            FireBridge({
+                "UpgradeSystem",
+                "Buy",
+                "Warrior Upgrades",
+                "Gold",
+                n = 4
+            })
+
+        end
+
+        if AutoRange then
+
+            FireBridge({
+                "UpgradeSystem",
+                "Buy",
+                "Warrior Upgrades",
+                "AttackRange",
+                n = 4
+            })
+
+        end
+
+    end
+end)
+
+--------------------------------------------------
+-- AUTO RANK UP
+-- EVERY 5 SECONDS
+--------------------------------------------------
+
+task.spawn(function()
+
+    while task.wait(5) do
+
+        if AutoRankUp then
+
+            FireBridge({
+                "RebirthSystem",
+                "Release",
+                "Rank",
+                "Energy",
+                n = 4
+            })
+
+        end
+
+    end
+end)
+
+--------------------------------------------------
+-- TIME REWARDS
+-- 1-9 EVERY 15 SECONDS
+--------------------------------------------------
+
+task.spawn(function()
+
+    while task.wait(15) do
+
+        if AutoTimeRewards then
+
+            for reward = 1, 9 do
+
+                FireBridge({
+                    "TimeRewardSystem",
+                    "Claim",
+                    "General",
+                    reward,
+                    n = 4
+                })
+
+                task.wait(0.2)
+
+            end
+
+        end
+
+    end
+end)
+
+--------------------------------------------------
+-- KNOWN ACHIEVEMENTS
+--------------------------------------------------
+
+local KnownAchievements = {}
+
+--------------------------------------------------
+-- ENERGY / DAMAGE / GOLD
+--------------------------------------------------
+
+for i = 1, 5 do
+
+    table.insert(
+        KnownAchievements,
+        "Energy" .. i
+    )
+
+    table.insert(
+        KnownAchievements,
+        "Damage" .. i
+    )
+
+    table.insert(
+        KnownAchievements,
+        "Gold" .. i
+    )
+
+end
+
+--------------------------------------------------
+-- GACHA / CARD LUCK
+--------------------------------------------------
+
+for i = 1, 7 do
+
+    table.insert(
+        KnownAchievements,
+        "GachaLuck" .. i
+    )
+
+    table.insert(
+        KnownAchievements,
+        "CardLuck" .. i
+    )
+
+end
+
+--------------------------------------------------
+-- KNOWN GAMEMODE ACHIEVEMENTS
+--------------------------------------------------
+
+table.insert(
+    KnownAchievements,
+    "Time TrialThe Hallway1"
+)
+
+table.insert(
+    KnownAchievements,
+    "Time TrialThe Hallway2"
+)
+
+--------------------------------------------------
+-- ACHIEVEMENTS
+-- EVERY 30 SECONDS
+--------------------------------------------------
+
+task.spawn(function()
+
+    while task.wait(30) do
+
+        if AutoAchievements then
+
+            for _, achievementId in ipairs(
+                KnownAchievements
+            ) do
+
+                FireBridge({
+                    "AchievementSystem",
+                    "Claim",
+                    achievementId,
+                    n = 3
+                })
+
+                task.wait(0.2)
+
+            end
+
+        end
+
+    end
+end)
+
+print("FULL SCRIPT LOADED")
