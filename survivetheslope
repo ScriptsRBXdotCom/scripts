@@ -1,0 +1,354 @@
+--// DEV PLAYTEST - CLIENT
+--// Rayfield Gen2
+
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local GuiService = game:GetService("GuiService")
+
+local Player = Players.LocalPlayer
+local Event = ReplicatedStorage:WaitForChild("LorenBridge")
+
+--------------------------------------------------
+-- UI
+--------------------------------------------------
+
+local Window = Rayfield:CreateWindow({
+    name = "Dev Playtest",
+    subtitle = "Upgrade Automation",
+    sidebarLayout = true,
+})
+
+local AutomationTab = Window:CreateTab({
+    name = "Automation"
+})
+
+--------------------------------------------------
+-- BUFFER HELPER
+--------------------------------------------------
+
+local function makeBuffer(bytes)
+    local b = buffer.create(#bytes)
+
+    for i = 1, #bytes do
+        buffer.writeu8(b, i - 1, bytes[i])
+    end
+
+    return b
+end
+
+--------------------------------------------------
+-- PACKETS
+--------------------------------------------------
+
+local MATERIAL_BUFFER = makeBuffer({
+    57, 0, 22, 5, 0
+})
+
+local UpgradeBuffers = {
+    Legs = makeBuffer({
+        45, 0, 23, 2, 1
+    }),
+
+    Arms = makeBuffer({
+        48, 0, 23, 2, 1
+    }),
+
+    Torso = makeBuffer({
+        50, 0, 23, 2, 1
+    }),
+
+    Head = makeBuffer({
+        52, 0, 23, 2, 1
+    }),
+}
+
+--------------------------------------------------
+-- SETTINGS
+--------------------------------------------------
+
+local Enabled = {
+    Material = false,
+    Legs = false,
+    Arms = false,
+    Torso = false,
+    Head = false,
+    All = false,
+}
+
+local DELAY = 0.5
+
+--------------------------------------------------
+-- CHECK IF AUTOMATION IS RUNNING
+--------------------------------------------------
+
+local function automationActive()
+    return Enabled.Material
+        or Enabled.Legs
+        or Enabled.Arms
+        or Enabled.Torso
+        or Enabled.Head
+        or Enabled.All
+end
+
+--------------------------------------------------
+-- PURCHASE PROMPT SUPPRESSOR
+--------------------------------------------------
+
+local function closeCorePrompt()
+
+    pcall(function()
+
+        GuiService:InspectPlayerFromUserId(
+            Player.UserId
+        )
+
+        task.wait()
+
+        GuiService:CloseInspectMenu()
+
+    end)
+end
+
+-- Continuously close CoreGui prompts ONLY while
+-- one of the automation options is running.
+
+task.spawn(function()
+
+    while true do
+
+        if automationActive() then
+
+            closeCorePrompt()
+
+            -- Keep this fairly quick so the Robux
+            -- prompt disappears immediately.
+            task.wait(0.05)
+
+        else
+
+            task.wait(0.25)
+        end
+    end
+
+end)
+
+--------------------------------------------------
+-- ACTIONS
+--------------------------------------------------
+
+local function buyMaterial()
+
+    Event:FireServer(
+        MATERIAL_BUFFER
+    )
+
+end
+
+local function upgrade(part)
+
+    local packet = UpgradeBuffers[part]
+
+    if not packet then
+        return
+    end
+
+    Event:FireServer(
+        packet,
+        part
+    )
+
+end
+
+--------------------------------------------------
+-- AUTO MATERIAL
+--------------------------------------------------
+
+AutomationTab:CreateToggle({
+    name = "Auto Buy Material",
+
+    callback = function(value)
+
+        Enabled.Material = value
+
+        if not value then
+            return
+        end
+
+        task.spawn(function()
+
+            while Enabled.Material do
+
+                buyMaterial()
+
+                task.wait(DELAY)
+            end
+
+        end)
+    end,
+})
+
+--------------------------------------------------
+-- AUTO LEGS
+--------------------------------------------------
+
+AutomationTab:CreateToggle({
+    name = "Auto Upgrade Legs",
+
+    callback = function(value)
+
+        Enabled.Legs = value
+
+        if not value then
+            return
+        end
+
+        task.spawn(function()
+
+            while Enabled.Legs do
+
+                upgrade("Legs")
+
+                task.wait(DELAY)
+            end
+
+        end)
+    end,
+})
+
+--------------------------------------------------
+-- AUTO ARMS
+--------------------------------------------------
+
+AutomationTab:CreateToggle({
+    name = "Auto Upgrade Arms",
+
+    callback = function(value)
+
+        Enabled.Arms = value
+
+        if not value then
+            return
+        end
+
+        task.spawn(function()
+
+            while Enabled.Arms do
+
+                upgrade("Arms")
+
+                task.wait(DELAY)
+            end
+
+        end)
+    end,
+})
+
+--------------------------------------------------
+-- AUTO TORSO
+--------------------------------------------------
+
+AutomationTab:CreateToggle({
+    name = "Auto Upgrade Torso",
+
+    callback = function(value)
+
+        Enabled.Torso = value
+
+        if not value then
+            return
+        end
+
+        task.spawn(function()
+
+            while Enabled.Torso do
+
+                upgrade("Torso")
+
+                task.wait(DELAY)
+            end
+
+        end)
+    end,
+})
+
+--------------------------------------------------
+-- AUTO HEAD
+--------------------------------------------------
+
+AutomationTab:CreateToggle({
+    name = "Auto Upgrade Head",
+
+    callback = function(value)
+
+        Enabled.Head = value
+
+        if not value then
+            return
+        end
+
+        task.spawn(function()
+
+            while Enabled.Head do
+
+                upgrade("Head")
+
+                task.wait(DELAY)
+            end
+
+        end)
+    end,
+})
+
+--------------------------------------------------
+-- AUTO ALL
+--------------------------------------------------
+
+AutomationTab:CreateToggle({
+    name = "Auto Upgrade All",
+
+    callback = function(value)
+
+        Enabled.All = value
+
+        if not value then
+            return
+        end
+
+        task.spawn(function()
+
+            while Enabled.All do
+
+                upgrade("Legs")
+
+                task.wait(0.1)
+
+                if not Enabled.All then
+                    break
+                end
+
+                upgrade("Arms")
+
+                task.wait(0.1)
+
+                if not Enabled.All then
+                    break
+                end
+
+                upgrade("Torso")
+
+                task.wait(0.1)
+
+                if not Enabled.All then
+                    break
+                end
+
+                upgrade("Head")
+
+                task.wait(DELAY)
+            end
+
+        end)
+    end,
+})
