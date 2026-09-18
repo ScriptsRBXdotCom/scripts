@@ -1,0 +1,1790 @@
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+
+local Player = Players.LocalPlayer
+
+local Debree = workspace:WaitForChild("Debree")
+local DebreeRegions = Debree:WaitForChild("Regions")
+local Humanoids = workspace:WaitForChild("Humanoids")
+
+-- ui
+
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
+
+local window = Rayfield:CreateWindow({
+    name = "NPC Playtest",
+    subtitle = "Farm / ESP / Areas / Movement",
+    sidebarLayout = true,
+    theme = "cobalt"
+})
+
+local farmTab = window:CreateTab({
+    name = "Auto Farm",
+    icon = 93364949241311
+})
+
+local combatTab = window:CreateTab({
+    name = "Combat",
+    icon = 93364949241311
+})
+
+local espTab = window:CreateTab({
+    name = "ESP",
+    icon = 93364949241311
+})
+
+local areasTab = window:CreateTab({
+    name = "Areas",
+    icon = 93364949241311
+})
+
+local movementTab = window:CreateTab({
+    name = "Movement",
+    icon = 93364949241311
+})
+
+-- player
+
+local function getCharacter()
+    local character = Player.Character
+
+    if character and character.Parent then
+        return character
+    end
+
+    return Player.CharacterAdded:Wait()
+end
+
+local function getRoot()
+    local character = getCharacter()
+
+    return character:FindFirstChild("HumanoidRootPart")
+        or character:WaitForChild("HumanoidRootPart")
+end
+
+local function getHumanoid()
+    local character = Player.Character
+
+    if not character then
+        return nil
+    end
+
+    return character:FindFirstChildOfClass("Humanoid")
+end
+
+local function characterAlive()
+    local character = Player.Character
+
+    if not character or not character.Parent then
+        return false
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local root = character:FindFirstChild("HumanoidRootPart")
+
+    return humanoid
+        and root
+        and humanoid.Health > 0
+end
+
+local function waitForAliveCharacter()
+    while true do
+        local character = Player.Character
+
+        if character and character.Parent then
+            local humanoid =
+                character:FindFirstChildOfClass("Humanoid")
+
+            local root =
+                character:FindFirstChild("HumanoidRootPart")
+
+            if humanoid
+                and root
+                and humanoid.Health > 0
+            then
+                return character, humanoid, root
+            end
+        end
+
+        task.wait(0.1)
+    end
+end
+
+local function getObjectRoot(object)
+    if not object then
+        return nil
+    end
+
+    if object:IsA("BasePart") then
+        return object
+    end
+
+    if object:IsA("Model") then
+        return object:FindFirstChild("HumanoidRootPart")
+            or object:FindFirstChild("LowerTorso")
+            or object:FindFirstChild("Torso")
+            or object:FindFirstChild("Root")
+            or object.PrimaryPart
+            or object:FindFirstChildWhichIsA("BasePart", true)
+    end
+
+    return object:FindFirstChildWhichIsA("BasePart", true)
+end
+
+-- regions
+
+local function getHumanoidRegions()
+    return Humanoids:FindFirstChild("Regions") or Humanoids
+end
+
+local function getHumanoidRegion(regionName)
+    local regions = getHumanoidRegions()
+
+    if not regions then
+        return nil
+    end
+
+    return regions:FindFirstChild(regionName)
+end
+
+local function getDebreeRegion(regionName)
+    return DebreeRegions:FindFirstChild(regionName)
+end
+
+local AREA_CRYSTALS = {
+    ["Bamboo Grove"] = "SpawnCrystal",
+    ["Butterfly Estate"] = "SpawnCrystal",
+    ["Final Selection Plains"] = "SpawnCrystal - Final Selection",
+    ["Hidden Mist Village"] = "SpawnCrystal",
+    ["Iceveil Valley"] = "SpawnCrystal - Iceveil Settlement",
+    ["Mistfall Harbor"] = "SpawnCrystal",
+    ["Windy Peak"] = "SpawnCrystal"
+}
+
+local function findSpawnCrystal(region)
+    if not region then
+        return nil
+    end
+
+    local expected = AREA_CRYSTALS[region.Name]
+
+    if expected then
+        local crystal = region:FindFirstChild(expected)
+
+        if crystal then
+            return crystal
+        end
+    end
+
+    local normal = region:FindFirstChild("SpawnCrystal")
+
+    if normal then
+        return normal
+    end
+
+    for _, object in ipairs(region:GetChildren()) do
+        if string.find(
+            string.lower(object.Name),
+            "spawncrystal",
+            1,
+            true
+        ) then
+            return object
+        end
+    end
+
+    return nil
+end
+
+local function getObjectCFrame(object)
+    if not object then
+        return nil
+    end
+
+    if object:IsA("BasePart") then
+        return object.CFrame
+    end
+
+    if object:IsA("Attachment") then
+        return object.WorldCFrame
+    end
+
+    if object:IsA("Model") then
+        local success, pivot = pcall(function()
+            return object:GetPivot()
+        end)
+
+        if success and pivot then
+            return pivot
+        end
+    end
+
+    local part =
+        object:FindFirstChildWhichIsA("BasePart", true)
+
+    if part then
+        return part.CFrame
+    end
+
+    return nil
+end
+
+local function getTeleportableRegions()
+    local result = {}
+
+    for _, region in ipairs(DebreeRegions:GetChildren()) do
+        if findSpawnCrystal(region) then
+            table.insert(result, region.Name)
+        end
+    end
+
+    table.sort(result)
+
+    return result
+end
+
+local function teleportToRegion(regionName)
+    local region = getDebreeRegion(regionName)
+
+    if not region then
+        return false
+    end
+
+    local crystal = findSpawnCrystal(region)
+
+    if not crystal then
+        return false
+    end
+
+    local cf = getObjectCFrame(crystal)
+
+    if not cf then
+        return false
+    end
+
+    local _, _, root = waitForAliveCharacter()
+
+    root.CFrame =
+        cf * CFrame.new(0, 5, 0)
+
+    root.AssemblyLinearVelocity =
+        Vector3.zero
+
+    root.AssemblyAngularVelocity =
+        Vector3.zero
+
+    return true
+end
+
+-- npc
+
+local function getRegionActiveNPCs(regionName)
+    local region = getHumanoidRegion(regionName)
+
+    if not region then
+        return nil
+    end
+
+    return region:FindFirstChild("ActiveNpcs")
+end
+
+local function cleanNPCName(name)
+    local cleaned = tostring(name or "")
+
+    cleaned = cleaned:gsub("%*", "")
+    cleaned = cleaned:gsub("^%s+", "")
+    cleaned = cleaned:gsub("%s+$", "")
+
+    return string.lower(cleaned)
+end
+
+local function displayNPCName(name)
+    local cleaned = tostring(name or "")
+
+    cleaned = cleaned:gsub("%*", "")
+    cleaned = cleaned:gsub("^%s+", "")
+    cleaned = cleaned:gsub("%s+$", "")
+
+    return cleaned
+end
+
+local function resolveNPC(entry)
+    if not entry then
+        return nil
+    end
+
+    if entry:IsA("Model") then
+        local humanoid =
+            entry:FindFirstChildOfClass("Humanoid")
+
+        if humanoid then
+            local root =
+                entry:FindFirstChild("HumanoidRootPart")
+                or entry:FindFirstChild("LowerTorso")
+                or entry:FindFirstChild("Torso")
+                or entry.PrimaryPart
+                or entry:FindFirstChildWhichIsA("BasePart")
+
+            if root then
+                return {
+                    Entry = entry,
+                    Character = entry,
+                    Humanoid = humanoid,
+                    Root = root,
+                    RawName = entry.Name,
+                    Name = displayNPCName(entry.Name)
+                }
+            end
+        end
+    end
+
+    for _, child in ipairs(entry:GetChildren()) do
+        if child:IsA("Model") then
+            local humanoid =
+                child:FindFirstChildOfClass("Humanoid")
+
+            if humanoid then
+                local root =
+                    child:FindFirstChild("HumanoidRootPart")
+                    or child:FindFirstChild("LowerTorso")
+                    or child:FindFirstChild("Torso")
+                    or child.PrimaryPart
+                    or child:FindFirstChildWhichIsA("BasePart")
+
+                if root then
+                    return {
+                        Entry = entry,
+                        Character = child,
+                        Humanoid = humanoid,
+                        Root = root,
+                        RawName = child.Name,
+                        Name = displayNPCName(child.Name)
+                    }
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+local function targetIsValid(npc)
+    return npc
+        and npc.Entry
+        and npc.Entry.Parent
+        and npc.Character
+        and npc.Character.Parent
+        and npc.Root
+        and npc.Root.Parent
+        and npc.Humanoid
+        and npc.Humanoid.Parent
+        and npc.Humanoid.Health > 0
+end
+
+local function getActiveNPCEntries(regionName)
+    local active =
+        getRegionActiveNPCs(regionName)
+
+    if not active then
+        return {}
+    end
+
+    local result = {}
+
+    for _, entry in ipairs(active:GetChildren()) do
+        local npc = resolveNPC(entry)
+
+        if targetIsValid(npc) then
+            table.insert(result, npc)
+        end
+    end
+
+    return result
+end
+
+local function refreshAreaNPCs(regionName)
+    local active =
+        getRegionActiveNPCs(regionName)
+
+    if not active then
+        print("[NPC]", regionName, "not loaded")
+        return {}, 0
+    end
+
+    local npcs =
+        getActiveNPCEntries(regionName)
+
+    local counts = {}
+
+    for _, npc in ipairs(npcs) do
+        counts[npc.Name] =
+            (counts[npc.Name] or 0) + 1
+    end
+
+    local names = {}
+
+    for name, count in pairs(counts) do
+        table.insert(names, name)
+
+        print(
+            "[NPC]",
+            name,
+            "x" .. tostring(count)
+        )
+    end
+
+    table.sort(names)
+
+    print(
+        "[NPC]",
+        regionName,
+        "total:",
+        #npcs
+    )
+
+    return names, #npcs
+end
+
+-- combat
+
+local InputHandler =
+    require(
+        RS.CAM.Client.Components.Client.InputHandler
+    )
+
+local function combatPress()
+    local success, err = pcall(function()
+        InputHandler.VirtualPress(
+            "Combat",
+            Enum.UserInputType.MouseButton1
+        )
+    end)
+
+    if not success then
+        warn("[COMBAT PRESS]", err)
+    end
+end
+
+local function combatRelease()
+    local success, err = pcall(function()
+        InputHandler.VirtualRelease("Combat")
+    end)
+
+    if not success then
+        warn("[COMBAT RELEASE]", err)
+    end
+end
+
+local function combatClick(holdTime)
+    combatPress()
+
+    task.wait(holdTime or 0.015)
+
+    combatRelease()
+end
+
+-- farm
+
+local regionOptions =
+    getTeleportableRegions()
+
+local selectedRegion =
+    table.find(regionOptions, "Windy Peak")
+    and "Windy Peak"
+    or regionOptions[1]
+
+local selectedNPC = "Bandit"
+
+local autoFarm = false
+local autoMelee = true
+
+local farmHeight = 3
+local maxTargetDistance = 2500
+local hitDistance = 8
+
+local meleeInterval = 0.05
+local meleeHoldTime = 0.015
+
+local farmLoadedRegion = nil
+local currentFarmTarget = nil
+
+local respawning = false
+local farmGeneration = 0
+
+local function findNearestRegionNPC(
+    regionName,
+    requestedName
+)
+    if not characterAlive() then
+        return nil, math.huge
+    end
+
+    local playerRoot = getRoot()
+
+    local closest = nil
+    local closestDistance = math.huge
+
+    local requestedClean =
+        cleanNPCName(requestedName)
+
+    local anyNPC =
+        requestedName == "Nearest Active NPC"
+
+    for _, npc in ipairs(
+        getActiveNPCEntries(regionName)
+    ) do
+        local matches =
+            anyNPC
+            or cleanNPCName(npc.Name)
+            == requestedClean
+
+        if matches then
+            local distance =
+                (
+                    playerRoot.Position
+                    - npc.Root.Position
+                ).Magnitude
+
+            if distance < closestDistance then
+                closest = npc
+                closestDistance = distance
+            end
+        end
+    end
+
+    return closest, closestDistance
+end
+
+local function findAnyMatchingNPC()
+    local requestedClean =
+        cleanNPCName(selectedNPC)
+
+    local anyNPC =
+        selectedNPC == "Nearest Active NPC"
+
+    for _, npc in ipairs(
+        getActiveNPCEntries(selectedRegion)
+    ) do
+        if anyNPC
+            or cleanNPCName(npc.Name)
+            == requestedClean
+        then
+            return npc
+        end
+    end
+
+    return nil
+end
+
+local function positionAtNPC(npc)
+    if not targetIsValid(npc) then
+        return false
+    end
+
+    local _, _, playerRoot =
+        waitForAliveCharacter()
+
+    if not targetIsValid(npc) then
+        return false
+    end
+
+    local npcPosition =
+        npc.Root.Position
+
+    local targetPosition =
+        npcPosition
+        + Vector3.new(
+            0,
+            farmHeight,
+            0
+        )
+
+    local flatLook =
+        Vector3.new(
+            npcPosition.X,
+            targetPosition.Y,
+            npcPosition.Z
+        )
+
+    if (
+        targetPosition - flatLook
+    ).Magnitude > 0.01 then
+        playerRoot.CFrame =
+            CFrame.lookAt(
+                targetPosition,
+                flatLook
+            )
+    else
+        playerRoot.CFrame =
+            CFrame.new(targetPosition)
+    end
+
+    playerRoot.AssemblyLinearVelocity =
+        Vector3.zero
+
+    playerRoot.AssemblyAngularVelocity =
+        Vector3.zero
+
+    return true
+end
+
+local function loadFarmArea()
+    if not selectedRegion then
+        return false
+    end
+
+    if farmLoadedRegion ==
+        selectedRegion
+    then
+        return true
+    end
+
+    if not teleportToRegion(
+        selectedRegion
+    ) then
+        return false
+    end
+
+    farmLoadedRegion =
+        selectedRegion
+
+    window:Notify({
+        title = "Auto Farm",
+        content =
+            "Waiting for "
+            .. selectedRegion
+            .. " NPCs..."
+    })
+
+    task.wait(2)
+
+    refreshAreaNPCs(selectedRegion)
+
+    return true
+end
+
+-- respawn
+
+local function returnToFarmAfterRespawn()
+    if respawning then
+        return
+    end
+
+    respawning = true
+
+    task.spawn(function()
+        print("[FARM] Respawning...")
+
+        combatRelease()
+
+        local _, _, root =
+            waitForAliveCharacter()
+
+        task.wait(0.5)
+
+        if not autoFarm then
+            respawning = false
+            return
+        end
+
+        local target =
+            currentFarmTarget
+
+        if not targetIsValid(target) then
+            target =
+                findAnyMatchingNPC()
+        end
+
+        local timeout =
+            os.clock() + 8
+
+        while autoFarm
+            and not targetIsValid(target)
+            and os.clock() < timeout
+        do
+            task.wait(0.25)
+
+            target =
+                findAnyMatchingNPC()
+        end
+
+        if autoFarm
+            and targetIsValid(target)
+        then
+            currentFarmTarget =
+                target
+
+            positionAtNPC(target)
+
+            print(
+                "[FARM] Returned to",
+                target.Name,
+                "after respawn"
+            )
+
+            window:Notify({
+                title = "Auto Farm",
+                content =
+                    "Returned to "
+                    .. target.Name
+            })
+
+        elseif autoFarm then
+            -- Region is still considered loaded.
+            -- Do NOT teleport back to crystal.
+            currentFarmTarget = nil
+
+            print(
+                "[FARM] Respawned; waiting for NPC."
+            )
+        end
+
+        if root and root.Parent then
+            root.AssemblyLinearVelocity =
+                Vector3.zero
+        end
+
+        respawning = false
+    end)
+end
+
+Player.CharacterRemoving:Connect(function()
+    if autoFarm then
+        respawning = true
+        currentFarmTarget =
+            targetIsValid(currentFarmTarget)
+            and currentFarmTarget
+            or nil
+    end
+
+    pcall(combatRelease)
+end)
+
+Player.CharacterAdded:Connect(function()
+    if autoFarm then
+        respawning = false
+        returnToFarmAfterRespawn()
+    end
+end)
+
+-- farm ui
+
+farmTab:CreateSection({
+    name = "Target"
+})
+
+farmTab:CreateDropdown({
+    name = "NPC",
+
+    options = {
+        "Nearest Active NPC",
+        "Bandit",
+        "Civilian",
+        "Zuko"
+    },
+
+    currentOption = "Bandit",
+
+    callback = function(value)
+        selectedNPC = value
+        currentFarmTarget = nil
+    end
+})
+
+farmTab:CreateDropdown({
+    name = "Farm Area",
+    options = regionOptions,
+    currentOption = selectedRegion,
+
+    callback = function(value)
+        if value ~= selectedRegion then
+            selectedRegion = value
+            farmLoadedRegion = nil
+            currentFarmTarget = nil
+        end
+    end
+})
+
+farmTab:CreateSection({
+    name = "NPC Loading"
+})
+
+farmTab:CreateButton({
+    name = "Refresh NPCs",
+
+    callback = function()
+        local _, total =
+            refreshAreaNPCs(selectedRegion)
+
+        window:Notify({
+            title = "NPC Refresh",
+            content =
+                tostring(total)
+                .. " actual NPCs found."
+        })
+    end
+})
+
+farmTab:CreateButton({
+    name = "Teleport + Refresh NPCs",
+
+    callback = function()
+        task.spawn(function()
+            if teleportToRegion(
+                selectedRegion
+            ) then
+                farmLoadedRegion =
+                    selectedRegion
+
+                task.wait(2)
+
+                local _, total =
+                    refreshAreaNPCs(
+                        selectedRegion
+                    )
+
+                window:Notify({
+                    title = selectedRegion,
+                    content =
+                        tostring(total)
+                        .. " NPCs ready."
+                })
+            end
+        end)
+    end
+})
+
+farmTab:CreateButton({
+    name = "Teleport to Farm Area",
+
+    callback = function()
+        if teleportToRegion(
+            selectedRegion
+        ) then
+            farmLoadedRegion =
+                selectedRegion
+        end
+    end
+})
+
+farmTab:CreateSection({
+    name = "Settings"
+})
+
+farmTab:CreateSlider({
+    name = "Height Above NPC",
+    range = {1, 10},
+    increment = 0.5,
+    currentValue = 3,
+
+    callback = function(value)
+        farmHeight = value
+    end
+})
+
+farmTab:CreateSlider({
+    name = "Target Range",
+    range = {100, 5000},
+    increment = 100,
+    currentValue = 2500,
+
+    callback = function(value)
+        maxTargetDistance = value
+    end
+})
+
+farmTab:CreateToggle({
+    name = "Auto Farm",
+    currentValue = false,
+
+    callback = function(value)
+        autoFarm = value
+        farmGeneration += 1
+
+        local thisGeneration =
+            farmGeneration
+
+        if not value then
+            currentFarmTarget = nil
+            respawning = false
+
+            pcall(combatRelease)
+
+            return
+        end
+
+        task.spawn(function()
+            if not loadFarmArea() then
+                autoFarm = false
+                return
+            end
+
+            local lastRefresh = 0
+
+            while autoFarm
+                and thisGeneration
+                == farmGeneration
+            do
+                if not characterAlive() then
+                    RunService.Heartbeat:Wait()
+                    continue
+                end
+
+                if respawning then
+                    RunService.Heartbeat:Wait()
+                    continue
+                end
+
+                if farmLoadedRegion
+                    ~= selectedRegion
+                then
+                    currentFarmTarget = nil
+
+                    if not loadFarmArea() then
+                        break
+                    end
+                end
+
+                local npc, distance =
+                    findNearestRegionNPC(
+                        selectedRegion,
+                        selectedNPC
+                    )
+
+                if targetIsValid(npc)
+                    and distance
+                    <= maxTargetDistance
+                then
+                    currentFarmTarget =
+                        npc
+
+                    positionAtNPC(npc)
+
+                else
+                    currentFarmTarget =
+                        nil
+
+                    if os.clock()
+                        - lastRefresh
+                        >= 2
+                    then
+                        lastRefresh =
+                            os.clock()
+
+                        refreshAreaNPCs(
+                            selectedRegion
+                        )
+                    end
+                end
+
+                RunService.Heartbeat:Wait()
+            end
+        end)
+    end
+})
+
+-- auto melee
+
+combatTab:CreateSection({
+    name = "Auto Melee"
+})
+
+combatTab:CreateSlider({
+    name = "Click Interval",
+    range = {0.03, 0.25},
+    increment = 0.01,
+    currentValue = 0.05,
+
+    callback = function(value)
+        meleeInterval = value
+    end
+})
+
+combatTab:CreateSlider({
+    name = "Click Hold Time",
+    range = {0.01, 0.08},
+    increment = 0.005,
+    currentValue = 0.015,
+
+    callback = function(value)
+        meleeHoldTime = value
+    end
+})
+
+combatTab:CreateToggle({
+    name = "Auto Melee",
+    currentValue = true,
+
+    callback = function(value)
+        autoMelee = value
+
+        if not value then
+            pcall(combatRelease)
+        end
+    end
+})
+
+combatTab:CreateButton({
+    name = "Test One Melee Click",
+
+    callback = function()
+        task.spawn(function()
+            combatClick(meleeHoldTime)
+        end)
+    end
+})
+
+task.spawn(function()
+    while true do
+        if autoFarm
+            and autoMelee
+            and not respawning
+            and characterAlive()
+        then
+            local npc =
+                currentFarmTarget
+
+            if targetIsValid(npc) then
+                local root =
+                    getRoot()
+
+                local distance =
+                    (
+                        root.Position
+                        - npc.Root.Position
+                    ).Magnitude
+
+                if distance <= hitDistance then
+                    combatClick(
+                        meleeHoldTime
+                    )
+                end
+            end
+        end
+
+        task.wait(meleeInterval)
+    end
+end)
+
+-- block
+
+local SignalEvent =
+    RS:WaitForChild("Communication")
+      :WaitForChild("ServerAndClient")
+      :WaitForChild("Signals")
+      :WaitForChild("SignalEvent")
+      :WaitForChild("Event")
+
+local autoBlock = false
+
+local function holdBlock()
+    if not characterAlive() then
+        return
+    end
+
+    SignalEvent:FireServer(
+        "server_skill_controller_signaler",
+        "Blocking",
+        "Hold",
+        getRoot().Position
+    )
+end
+
+local function releaseBlock()
+    if not characterAlive() then
+        return
+    end
+
+    SignalEvent:FireServer(
+        "server_skill_controller_signaler",
+        "Blocking",
+        "UnHold",
+        getRoot().Position,
+        nil
+    )
+end
+
+combatTab:CreateSection({
+    name = "Blocking"
+})
+
+combatTab:CreateToggle({
+    name = "Auto Block",
+    currentValue = false,
+
+    callback = function(value)
+        autoBlock = value
+
+        if value then
+            holdBlock()
+        else
+            releaseBlock()
+        end
+    end
+})
+
+-- esp
+
+local activeESP = false
+local stationaryESP = false
+local ESPObjects = {}
+
+local function createESP(
+    model,
+    displayName,
+    stationary
+)
+    if not model
+        or not model:IsA("Model")
+        or ESPObjects[model]
+    then
+        return
+    end
+
+    local root =
+        getObjectRoot(model)
+
+    if not root then
+        return
+    end
+
+    displayName =
+        displayNPCName(
+            displayName
+            or model.Name
+        )
+
+    local highlight =
+        Instance.new("Highlight")
+
+    highlight.Name =
+        "_NPC_PLAYTEST_ESP"
+
+    highlight.Adornee =
+        model
+
+    highlight.DepthMode =
+        Enum.HighlightDepthMode.AlwaysOnTop
+
+    highlight.FillTransparency =
+        0.5
+
+    highlight.OutlineTransparency =
+        0
+
+    if stationary then
+        highlight.FillColor =
+            Color3.fromRGB(
+                180,
+                80,
+                255
+            )
+
+    elseif cleanNPCName(
+        displayName
+    ) == "civilian"
+    then
+        highlight.FillColor =
+            Color3.fromRGB(
+                0,
+                170,
+                255
+            )
+
+    else
+        highlight.FillColor =
+            Color3.fromRGB(
+                255,
+                70,
+                70
+            )
+    end
+
+    highlight.OutlineColor =
+        Color3.fromRGB(
+            255,
+            255,
+            255
+        )
+
+    highlight.Parent =
+        model
+
+    local billboard =
+        Instance.new("BillboardGui")
+
+    billboard.Name =
+        "_NPC_PLAYTEST_ESP"
+
+    billboard.Adornee =
+        root
+
+    billboard.Size =
+        UDim2.new(
+            0,
+            180,
+            0,
+            45
+        )
+
+    billboard.StudsOffset =
+        Vector3.new(
+            0,
+            3.5,
+            0
+        )
+
+    billboard.AlwaysOnTop =
+        true
+
+    billboard.Parent =
+        root
+
+    local label =
+        Instance.new("TextLabel")
+
+    label.Size =
+        UDim2.fromScale(1, 1)
+
+    label.BackgroundTransparency =
+        1
+
+    label.Text =
+        displayName
+
+    label.TextColor3 =
+        Color3.fromRGB(
+            255,
+            255,
+            255
+        )
+
+    label.TextStrokeTransparency =
+        0
+
+    label.TextSize =
+        14
+
+    label.Font =
+        Enum.Font.GothamBold
+
+    label.Parent =
+        billboard
+
+    ESPObjects[model] = {
+        Highlight = highlight,
+        Billboard = billboard,
+        Label = label,
+        Root = root,
+        DisplayName = displayName,
+        Stationary = stationary
+    }
+end
+
+local function removeESP(model)
+    local data =
+        ESPObjects[model]
+
+    if not data then
+        return
+    end
+
+    if data.Highlight then
+        data.Highlight:Destroy()
+    end
+
+    if data.Billboard then
+        data.Billboard:Destroy()
+    end
+
+    ESPObjects[model] = nil
+end
+
+local function clearESP(stationary)
+    local remove = {}
+
+    for model, data in pairs(
+        ESPObjects
+    ) do
+        if data.Stationary
+            == stationary
+        then
+            table.insert(
+                remove,
+                model
+            )
+        end
+    end
+
+    for _, model in ipairs(remove) do
+        removeESP(model)
+    end
+end
+
+local function scanActiveESP()
+    if not activeESP then
+        return
+    end
+
+    local regions =
+        getHumanoidRegions()
+
+    if not regions then
+        return
+    end
+
+    for _, region in ipairs(
+        regions:GetChildren()
+    ) do
+        local active =
+            region:FindFirstChild(
+                "ActiveNpcs"
+            )
+
+        if active then
+            for _, entry in ipairs(
+                active:GetChildren()
+            ) do
+                local npc =
+                    resolveNPC(entry)
+
+                if targetIsValid(npc) then
+                    createESP(
+                        npc.Character,
+                        npc.Name,
+                        false
+                    )
+                end
+            end
+        end
+    end
+end
+
+local function scanStationaryFolder(folder)
+    for _, entry in ipairs(
+        folder:GetChildren()
+    ) do
+        if entry:IsA("Model") then
+            local npc =
+                resolveNPC(entry)
+
+            if npc then
+                createESP(
+                    npc.Character,
+                    npc.Name,
+                    true
+                )
+
+            elseif getObjectRoot(entry) then
+                createESP(
+                    entry,
+                    entry.Name,
+                    true
+                )
+            end
+        end
+    end
+end
+
+local function scanStationaryESP()
+    if not stationaryESP then
+        return
+    end
+
+    for _, region in ipairs(
+        DebreeRegions:GetChildren()
+    ) do
+        local folder =
+            region:FindFirstChild(
+                "StationaryNpcs"
+            )
+
+        if folder then
+            scanStationaryFolder(folder)
+        end
+    end
+end
+
+espTab:CreateSection({
+    name = "NPC ESP"
+})
+
+espTab:CreateToggle({
+    name = "All Active NPC ESP",
+    currentValue = false,
+
+    callback = function(value)
+        activeESP = value
+
+        if value then
+            scanActiveESP()
+        else
+            clearESP(false)
+        end
+    end
+})
+
+espTab:CreateToggle({
+    name = "All Stationary NPC ESP",
+    currentValue = false,
+
+    callback = function(value)
+        stationaryESP = value
+
+        if value then
+            scanStationaryESP()
+        else
+            clearESP(true)
+        end
+    end
+})
+
+espTab:CreateButton({
+    name = "Refresh ESP",
+
+    callback = function()
+        if activeESP then
+            scanActiveESP()
+        end
+
+        if stationaryESP then
+            scanStationaryESP()
+        end
+    end
+})
+
+task.spawn(function()
+    while task.wait(0.5) do
+        if activeESP then
+            scanActiveESP()
+        end
+
+        if stationaryESP then
+            scanStationaryESP()
+        end
+
+        if characterAlive() then
+            local playerRoot =
+                getRoot()
+
+            local remove = {}
+
+            for model, data in pairs(
+                ESPObjects
+            ) do
+                if not model.Parent
+                    or not data.Root
+                    or not data.Root.Parent
+                then
+                    table.insert(
+                        remove,
+                        model
+                    )
+
+                else
+                    local distance =
+                        (
+                            playerRoot.Position
+                            - data.Root.Position
+                        ).Magnitude
+
+                    data.Label.Text =
+                        data.DisplayName
+                        .. "\n"
+                        .. math.floor(distance)
+                        .. " studs"
+                end
+            end
+
+            for _, model in ipairs(remove) do
+                removeESP(model)
+            end
+        end
+    end
+end)
+
+-- areas
+
+local selectedArea =
+    selectedRegion
+
+areasTab:CreateSection({
+    name = "Area Teleport"
+})
+
+areasTab:CreateDropdown({
+    name = "Area",
+    options = regionOptions,
+    currentOption = selectedArea,
+
+    callback = function(value)
+        selectedArea = value
+    end
+})
+
+areasTab:CreateButton({
+    name = "Teleport to Area",
+
+    callback = function()
+        if selectedArea then
+            teleportToRegion(
+                selectedArea
+            )
+        end
+    end
+})
+
+areasTab:CreateButton({
+    name = "Teleport + Wait for NPCs",
+
+    callback = function()
+        if not selectedArea then
+            return
+        end
+
+        task.spawn(function()
+            if not teleportToRegion(
+                selectedArea
+            ) then
+                return
+            end
+
+            task.wait(2)
+
+            local _, total =
+                refreshAreaNPCs(
+                    selectedArea
+                )
+
+            if activeESP then
+                scanActiveESP()
+            end
+
+            if stationaryESP then
+                scanStationaryESP()
+            end
+
+            window:Notify({
+                title = selectedArea,
+                content =
+                    tostring(total)
+                    .. " active NPCs found."
+            })
+        end)
+    end
+})
+
+areasTab:CreateButton({
+    name = "Refresh Area NPCs",
+
+    callback = function()
+        local _, total =
+            refreshAreaNPCs(
+                selectedArea
+            )
+
+        window:Notify({
+            title = "Area NPCs",
+            content =
+                tostring(total)
+                .. " active NPCs found."
+        })
+    end
+})
+
+-- movement
+
+local speedEnabled = false
+local speedAmount = 50
+
+local flyEnabled = false
+local flySpeed = 50
+
+movementTab:CreateSection({
+    name = "Speed"
+})
+
+movementTab:CreateSlider({
+    name = "Speed Amount",
+    range = {16, 300},
+    increment = 2,
+    currentValue = 50,
+
+    callback = function(value)
+        speedAmount = value
+    end
+})
+
+movementTab:CreateToggle({
+    name = "Speed",
+    currentValue = false,
+
+    callback = function(value)
+        speedEnabled = value
+    end
+})
+
+RunService.Heartbeat:Connect(function(dt)
+    if not speedEnabled
+        or autoFarm
+        or flyEnabled
+        or not characterAlive()
+    then
+        return
+    end
+
+    local humanoid =
+        getHumanoid()
+
+    local root =
+        getRoot()
+
+    if not humanoid
+        or not root
+        or humanoid.Health <= 0
+    then
+        return
+    end
+
+    local direction =
+        humanoid.MoveDirection
+
+    if direction.Magnitude <= 0.01 then
+        return
+    end
+
+    local extraSpeed =
+        math.max(
+            0,
+            speedAmount - 16
+        )
+
+    if extraSpeed <= 0 then
+        return
+    end
+
+    root.CFrame =
+        root.CFrame
+        + direction.Unit
+        * extraSpeed
+        * dt
+end)
+
+movementTab:CreateSection({
+    name = "Fly"
+})
+
+movementTab:CreateSlider({
+    name = "Fly Speed",
+    range = {10, 300},
+    increment = 5,
+    currentValue = 50,
+
+    callback = function(value)
+        flySpeed = value
+    end
+})
+
+movementTab:CreateToggle({
+    name = "Fly",
+    currentValue = false,
+
+    callback = function(value)
+        flyEnabled = value
+
+        if not value
+            and characterAlive()
+        then
+            getRoot().AssemblyLinearVelocity =
+                Vector3.zero
+        end
+    end
+})
+
+RunService.RenderStepped:Connect(function(dt)
+    if not flyEnabled
+        or autoFarm
+        or not characterAlive()
+    then
+        return
+    end
+
+    local root =
+        getRoot()
+
+    local camera =
+        workspace.CurrentCamera
+
+    if not root
+        or not camera
+    then
+        return
+    end
+
+    local direction =
+        Vector3.zero
+
+    if UIS:IsKeyDown(
+        Enum.KeyCode.W
+    ) then
+        direction +=
+            camera.CFrame.LookVector
+    end
+
+    if UIS:IsKeyDown(
+        Enum.KeyCode.S
+    ) then
+        direction -=
+            camera.CFrame.LookVector
+    end
+
+    if UIS:IsKeyDown(
+        Enum.KeyCode.D
+    ) then
+        direction +=
+            camera.CFrame.RightVector
+    end
+
+    if UIS:IsKeyDown(
+        Enum.KeyCode.A
+    ) then
+        direction -=
+            camera.CFrame.RightVector
+    end
+
+    if UIS:IsKeyDown(
+        Enum.KeyCode.Space
+    ) then
+        direction +=
+            Vector3.yAxis
+    end
+
+    if UIS:IsKeyDown(
+        Enum.KeyCode.LeftControl
+    ) then
+        direction -=
+            Vector3.yAxis
+    end
+
+    if direction.Magnitude > 0 then
+        root.CFrame =
+            root.CFrame
+            + direction.Unit
+            * flySpeed
+            * dt
+    end
+
+    root.AssemblyLinearVelocity =
+        Vector3.zero
+end)
+
+-- ready
+
+window:Notify({
+    title = "NPC Playtest",
+    content = "V12 loaded."
+})
+
+print("[NPC PLAYTEST] V12 loaded.")
