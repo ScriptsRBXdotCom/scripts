@@ -14,8 +14,8 @@ local Humanoids = workspace:WaitForChild("Humanoids")
 local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
 
 local window = Rayfield:CreateWindow({
-    name = "NPC Playtest",
-    subtitle = "Farm / ESP / Areas / Movement",
+    name = "Slayers 2",
+    subtitle = "ScriptsRBX.com",
     sidebarLayout = true,
     theme = "cobalt"
 })
