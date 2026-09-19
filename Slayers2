@@ -14,19 +14,14 @@ local Humanoids = workspace:WaitForChild("Humanoids")
 local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
 
 local window = Rayfield:CreateWindow({
-    name = "ScriptsRBX.com",
-    subtitle = "Slayers 2",
+    name = "ScriptsRBX.om",
+    subtitle = "Farm / ESP / Areas / Movement",
     sidebarLayout = true,
     theme = "cobalt"
 })
 
 local farmTab = window:CreateTab({
     name = "Auto Farm",
-    icon = 93364949241311
-})
-
-local combatTab = window:CreateTab({
-    name = "Combat",
     icon = 93364949241311
 })
 
@@ -52,7 +47,7 @@ local function getCharacter()
 end
 
 local function getRoot()
-    local character = Player.Character
+    local character = getCharacter()
 
     if not character then
         return nil
@@ -62,7 +57,7 @@ local function getRoot()
 end
 
 local function getHumanoid()
-    local character = Player.Character
+    local character = getCharacter()
 
     if not character then
         return nil
@@ -72,7 +67,7 @@ local function getHumanoid()
 end
 
 local function characterAlive()
-    local character = Player.Character
+    local character = getCharacter()
 
     if not character or not character.Parent then
         return false
@@ -91,7 +86,7 @@ end
 
 local function waitForAliveCharacter()
     while true do
-        local character = Player.Character
+        local character = getCharacter()
 
         if character and character.Parent then
             local humanoid =
@@ -129,10 +124,7 @@ local function getObjectRoot(object)
             object:IsA("Model")
             and object.PrimaryPart
         )
-        or object:FindFirstChildWhichIsA(
-            "BasePart",
-            true
-        )
+        or object:FindFirstChildWhichIsA("BasePart", true)
 end
 
 -- regions
@@ -154,6 +146,10 @@ local AREA_CRYSTALS = {
     ["Iceveil Valley"] = "SpawnCrystal - Iceveil Settlement",
     ["Mistfall Harbor"] = "SpawnCrystal",
     ["Windy Peak"] = "SpawnCrystal"
+}
+
+local IGNORED_NPC_REGIONS = {
+    ["Misc"] = true
 }
 
 local function findSpawnCrystal(region)
@@ -180,9 +176,7 @@ local function findSpawnCrystal(region)
         return normal
     end
 
-    for _, object in ipairs(
-        region:GetChildren()
-    ) do
+    for _, object in ipairs(region:GetChildren()) do
         if string.find(
             string.lower(object.Name),
             "spawncrystal",
@@ -280,8 +274,7 @@ local function findSpawnPrompt(regionName)
         return nil
     end
 
-    -- exact structure:
-    -- SpawnCrystal.Root.At["Region"]
+    -- SpawnCrystal.Root.At["Region Name"]
 
     local root =
         crystal:FindFirstChild("Root")
@@ -304,15 +297,12 @@ local function findSpawnPrompt(regionName)
 
     -- fallback
 
-    for _, object in ipairs(
-        crystal:GetDescendants()
-    ) do
+    for _, object in ipairs(crystal:GetDescendants()) do
         if object:IsA("ProximityPrompt")
             and object.ActionText == "Set Spawn"
+            and object.Name == regionName
         then
-            if object.Name == regionName then
-                return object
-            end
+            return object
         end
     end
 
@@ -327,10 +317,7 @@ local function waitForSpawnPrompt(
 
     local started = os.clock()
 
-    print(
-        "[NPC] Waiting for spawn:",
-        regionName
-    )
+    print("[NPC] Waiting for spawn:", regionName)
 
     while os.clock() - started < timeout do
         local prompt =
@@ -408,10 +395,7 @@ local function activateSpawnPrompt(regionName)
 
     task.wait(1.25)
 
-    print(
-        "[NPC] Spawn set:",
-        regionName
-    )
+    print("[NPC] Spawn set:", regionName)
 
     return true
 end
@@ -438,8 +422,7 @@ local function teleportToRegion(
         return false
     end
 
-    -- teleport near crystal first so
-    -- its descendants can stream in
+    -- teleport to crystal first so prompt streams
 
     playerRoot.CFrame =
         cf * CFrame.new(0, 4, 0)
@@ -451,14 +434,7 @@ local function teleportToRegion(
         Vector3.zero
 
     if setSpawn then
-        local success =
-            activateSpawnPrompt(
-                regionName
-            )
-
-        if not success then
-            return false
-        end
+        return activateSpawnPrompt(regionName)
     end
 
     return true
@@ -510,6 +486,10 @@ end
 local function getRegionActiveNPCs(
     regionName
 )
+    if IGNORED_NPC_REGIONS[regionName] then
+        return nil
+    end
+
     local regions =
         getHumanoidRegions()
 
@@ -518,17 +498,13 @@ local function getRegionActiveNPCs(
     end
 
     local region =
-        regions:FindFirstChild(
-            regionName
-        )
+        regions:FindFirstChild(regionName)
 
     if not region then
         return nil
     end
 
-    return region:FindFirstChild(
-        "ActiveNpcs"
-    )
+    return region:FindFirstChild("ActiveNpcs")
 end
 
 local function resolveCharacter(
@@ -550,15 +526,9 @@ local function resolveCharacter(
     end
 
     local root =
-        object:FindFirstChild(
-            "HumanoidRootPart"
-        )
-        or object:FindFirstChild(
-            "LowerTorso"
-        )
-        or object:FindFirstChild(
-            "Torso"
-        )
+        object:FindFirstChild("HumanoidRootPart")
+        or object:FindFirstChild("LowerTorso")
+        or object:FindFirstChild("Torso")
         or (
             object:IsA("Model")
             and object.PrimaryPart
@@ -578,9 +548,7 @@ local function resolveCharacter(
         Root = root,
         Region = regionName,
         RawName = object.Name,
-        Name = displayNPCName(
-            object.Name
-        )
+        Name = displayNPCName(object.Name)
     }
 end
 
@@ -591,8 +559,6 @@ local function resolveNPC(
     if not entry then
         return nil
     end
-
-    -- entry itself may be the NPC
 
     local direct =
         resolveCharacter(
@@ -605,11 +571,7 @@ local function resolveNPC(
         return direct
     end
 
-    -- controller -> actual NPC model
-
-    for _, child in ipairs(
-        entry:GetChildren()
-    ) do
+    for _, child in ipairs(entry:GetChildren()) do
         local npc =
             resolveCharacter(
                 child,
@@ -638,13 +600,9 @@ local function targetIsValid(npc)
         and npc.Root.Parent
 end
 
-local function getRegionNPCs(
-    regionName
-)
+local function getRegionNPCs(regionName)
     local active =
-        getRegionActiveNPCs(
-            regionName
-        )
+        getRegionActiveNPCs(regionName)
 
     if not active then
         return {}
@@ -685,26 +643,32 @@ local function getAllLiveNPCs()
     for _, region in ipairs(
         regions:GetChildren()
     ) do
-        local active =
-            region:FindFirstChild(
-                "ActiveNpcs"
-            )
+        -- Misc completely ignored
 
-        if active then
-            for _, entry in ipairs(
-                active:GetChildren()
-            ) do
-                local npc =
-                    resolveNPC(
-                        entry,
-                        region.Name
-                    )
+        if not IGNORED_NPC_REGIONS[
+            region.Name
+        ] then
+            local active =
+                region:FindFirstChild(
+                    "ActiveNpcs"
+                )
 
-                if targetIsValid(npc) then
-                    table.insert(
-                        result,
-                        npc
-                    )
+            if active then
+                for _, entry in ipairs(
+                    active:GetChildren()
+                ) do
+                    local npc =
+                        resolveNPC(
+                            entry,
+                            region.Name
+                        )
+
+                    if targetIsValid(npc) then
+                        table.insert(
+                            result,
+                            npc
+                        )
+                    end
                 end
             end
         end
@@ -725,8 +689,6 @@ local function getControllerNPCName(
         return nil
     end
 
-    -- actual NPC already loaded
-
     local npc =
         resolveNPC(
             controller,
@@ -737,43 +699,30 @@ local function getControllerNPCName(
         return npc.Name
     end
 
-    -- otherwise use controller name
-
-    local controllerName =
-        displayNPCName(
-            controller.Name
-        )
-
-    -- NPC model may exist before Humanoid
-    -- or HRP has completely loaded
+    -- actual NPC model may exist before
+    -- Humanoid/HRP finishes loading
 
     for _, child in ipairs(
         controller:GetChildren()
     ) do
-        local childName =
-            displayNPCName(
-                child.Name
-            )
+        if child:IsA("Model") then
+            local name =
+                displayNPCName(
+                    child.Name
+                )
 
-        local lower =
-            string.lower(
-                childName
-            )
-
-        if childName ~= ""
-            and lower ~= "script"
-            and lower ~= "npcconfig"
-            and lower ~= "aisignal"
-            and lower ~= "getdatabindable"
-            and lower ~= "initialposes"
-        then
-            if child:IsA("Model") then
-                return childName
+            if name ~= "" then
+                return name
             end
         end
     end
 
-    return controllerName
+    -- otherwise controller name identifies
+    -- the NPC type
+
+    return displayNPCName(
+        controller.Name
+    )
 end
 
 local function discoverNPCs()
@@ -793,40 +742,44 @@ local function discoverNPCs()
     for _, region in ipairs(
         regions:GetChildren()
     ) do
-        local active =
-            region:FindFirstChild(
-                "ActiveNpcs"
-            )
+        if not IGNORED_NPC_REGIONS[
+            region.Name
+        ] then
+            local active =
+                region:FindFirstChild(
+                    "ActiveNpcs"
+                )
 
-        if active then
-            for _, controller in ipairs(
-                active:GetChildren()
-            ) do
-                local name =
-                    getControllerNPCName(
-                        controller
-                    )
+            if active then
+                for _, controller in ipairs(
+                    active:GetChildren()
+                ) do
+                    local name =
+                        getControllerNPCName(
+                            controller
+                        )
 
-                if name and name ~= "" then
-                    local key =
-                        cleanNPCName(name)
+                    if name and name ~= "" then
+                        local key =
+                            cleanNPCName(name)
 
-                    if key ~= "" then
-                        if not npcRegionMap[key] then
-                            npcRegionMap[key] =
-                                region.Name
-                        end
+                        if key ~= "" then
+                            if not npcRegionMap[key] then
+                                npcRegionMap[key] =
+                                    region.Name
+                            end
 
-                        npcDisplayMap[key] =
-                            name
-
-                        if not seen[key] then
-                            seen[key] = true
-
-                            table.insert(
-                                names,
+                            npcDisplayMap[key] =
                                 name
-                            )
+
+                            if not seen[key] then
+                                seen[key] = true
+
+                                table.insert(
+                                    names,
+                                    name
+                                )
+                            end
                         end
                     end
                 end
@@ -907,9 +860,7 @@ local function combatRelease()
     end)
 end
 
-local function combatClick(
-    holdTime
-)
+local function combatClick(holdTime)
     combatPress()
 
     task.wait(
@@ -925,14 +876,14 @@ local selectedNPC =
     discoveredNPCs[1]
 
 local selectedFarmRegion = nil
-
 local autoFarm = false
-local autoMelee = true
 
 local farmHeight = 3
 local maxTargetDistance = 5000
-local hitDistance = 8
 
+-- melee is part of Auto Farm
+
+local hitDistance = 8
 local meleeInterval = 0.05
 local meleeHoldTime = 0.015
 
@@ -952,11 +903,8 @@ local function selectedNPCMatches(
     targetName =
         targetName or selectedNPC
 
-    return cleanNPCName(
-        npc.Name
-    ) == cleanNPCName(
-        targetName
-    )
+    return cleanNPCName(npc.Name)
+        == cleanNPCName(targetName)
 end
 
 local function findNPCInRegion(
@@ -980,8 +928,6 @@ local function findNPCInRegion(
     local bestDistance =
         math.huge
 
-    -- fresh ActiveNpcs scan
-
     for _, npc in ipairs(
         getRegionNPCs(regionName)
     ) do
@@ -995,12 +941,9 @@ local function findNPCInRegion(
                     - npc.Root.Position
                 ).Magnitude
 
-            if distance
-                < bestDistance
-            then
+            if distance < bestDistance then
                 bestNPC = npc
-                bestDistance =
-                    distance
+                bestDistance = distance
             end
         end
     end
@@ -1031,9 +974,7 @@ local function positionAtNPC(npc)
         )
 
     root.CFrame =
-        CFrame.new(
-            targetPosition
-        )
+        CFrame.new(targetPosition)
 
     root.AssemblyLinearVelocity =
         Vector3.zero
@@ -1048,22 +989,17 @@ local function prepareFarmGeneration(
     generation,
     targetName
 )
-    -- refresh NPC -> region mapping
-
     discoverNPCs()
 
     if not autoFarm
-        or generation
-        ~= farmGeneration
+        or generation ~= farmGeneration
     then
         return false
     end
 
     local regionName =
         npcRegionMap[
-            cleanNPCName(
-                targetName
-            )
+            cleanNPCName(targetName)
         ]
 
     if not regionName then
@@ -1075,18 +1011,24 @@ local function prepareFarmGeneration(
         return false
     end
 
+    if IGNORED_NPC_REGIONS[regionName] then
+        return false
+    end
+
     selectedFarmRegion =
         regionName
 
     print(
-        "[FARM]",
+        "[NPC]",
         targetName,
         "->",
         regionName
     )
 
-    -- teleport to correct island
-    -- and set spawn
+    print(
+        "[NPC] Teleporting:",
+        regionName
+    )
 
     local success =
         teleportToRegion(
@@ -1094,12 +1036,11 @@ local function prepareFarmGeneration(
             true
         )
 
-    -- target may have changed while
+    -- NPC may have changed while
     -- crystal/prompt was loading
 
     if not autoFarm
-        or generation
-        ~= farmGeneration
+        or generation ~= farmGeneration
     then
         return false
     end
@@ -1118,12 +1059,11 @@ local function prepareFarmGeneration(
         targetName
     )
 
-    -- wait for actual target character
-    -- Humanoid + HRP to stream
+    -- controller may already exist while
+    -- actual Humanoid/HRP is still streaming
 
     while autoFarm
-        and generation
-        == farmGeneration
+        and generation == farmGeneration
     do
         local npc =
             select(
@@ -1169,21 +1109,20 @@ local function startFarmGeneration()
     local targetName =
         selectedNPC
 
-    currentFarmTarget = nil
-    selectedFarmRegion = nil
+    currentFarmTarget =
+        nil
 
-    pcall(
-        combatRelease
-    )
+    selectedFarmRegion =
+        nil
+
+    pcall(combatRelease)
 
     print(
-        "[FARM] Switching to:",
+        "[NPC] Switching to:",
         targetName
     )
 
     task.spawn(function()
-        -- prepare selected NPC's island
-
         local prepared =
             prepareFarmGeneration(
                 generation,
@@ -1192,17 +1131,13 @@ local function startFarmGeneration()
 
         if not prepared
             or not autoFarm
-            or generation
-            ~= farmGeneration
+            or generation ~= farmGeneration
         then
             return
         end
 
-        -- continuously farm selected NPC
-
         while autoFarm
-            and generation
-            == farmGeneration
+            and generation == farmGeneration
         do
             if not characterAlive()
                 or respawning
@@ -1223,7 +1158,7 @@ local function startFarmGeneration()
                     nil
             end
 
-            -- same live ActiveNpcs scan as ESP
+            -- live ActiveNpcs rescan
 
             local npc, distance =
                 findNPCInRegion(
@@ -1233,19 +1168,15 @@ local function startFarmGeneration()
 
             if npc
                 and targetIsValid(npc)
-                and distance
-                <= maxTargetDistance
+                and distance <= maxTargetDistance
             then
                 currentFarmTarget =
                     npc
 
-                positionAtNPC(
-                    npc
-                )
+                positionAtNPC(npc)
             else
-                -- dead / respawning NPC:
-                -- stay on island and keep
-                -- scanning for replacement
+                -- stay in same region and wait
+                -- for replacement NPC
 
                 currentFarmTarget =
                     nil
@@ -1254,9 +1185,7 @@ local function startFarmGeneration()
             task.wait(0.05)
         end
 
-        if generation
-            == farmGeneration
-        then
+        if generation == farmGeneration then
             currentFarmTarget =
                 nil
         end
@@ -1271,7 +1200,6 @@ farmTab:CreateSection({
 
 farmTab:CreateDropdown({
     name = "NPC",
-
     options = discoveredNPCs,
     currentOption = selectedNPC,
 
@@ -1286,24 +1214,18 @@ farmTab:CreateDropdown({
             return
         end
 
-        selectedNPC =
-            value
+        selectedNPC = value
 
-        currentFarmTarget =
-            nil
-
-        selectedFarmRegion =
-            nil
+        currentFarmTarget = nil
+        selectedFarmRegion = nil
 
         print(
-            "[FARM] New target:",
+            "[NPC] New target:",
             selectedNPC
         )
 
-        -- IMPORTANT:
-        -- Auto Farm already ON?
-        -- Immediately restart for the
-        -- newly selected NPC.
+        -- automatically adapt while farm
+        -- is already enabled
 
         if autoFarm then
             startFarmGeneration()
@@ -1334,12 +1256,11 @@ farmTab:CreateButton({
 })
 
 farmTab:CreateSection({
-    name = "Settings"
+    name = "Farm Settings"
 })
 
 farmTab:CreateSlider({
     name = "Height Above NPC",
-
     range = {1, 10},
     increment = 0.5,
     currentValue = 3,
@@ -1351,13 +1272,36 @@ farmTab:CreateSlider({
 
 farmTab:CreateSlider({
     name = "Target Range",
-
     range = {100, 10000},
     increment = 100,
     currentValue = 5000,
 
     callback = function(value)
         maxTargetDistance = value
+    end
+})
+
+-- melee settings are part of Auto Farm
+
+farmTab:CreateSlider({
+    name = "Hit Speed",
+    range = {0.03, 0.25},
+    increment = 0.01,
+    currentValue = 0.05,
+
+    callback = function(value)
+        meleeInterval = value
+    end
+})
+
+farmTab:CreateSlider({
+    name = "Click Hold Time",
+    range = {0.01, 0.08},
+    increment = 0.005,
+    currentValue = 0.015,
+
+    callback = function(value)
+        meleeHoldTime = value
     end
 })
 
@@ -1371,20 +1315,50 @@ farmTab:CreateToggle({
         if value then
             startFarmGeneration()
         else
-            -- invalidate every currently
-            -- running farm generation
-
             farmGeneration += 1
 
             currentFarmTarget = nil
             selectedFarmRegion = nil
 
-            pcall(
-                combatRelease
-            )
+            pcall(combatRelease)
         end
     end
 })
+
+-- automatic farm melee
+
+task.spawn(function()
+    while true do
+        if autoFarm
+            and not respawning
+            and characterAlive()
+        then
+            local npc =
+                currentFarmTarget
+
+            if targetIsValid(npc) then
+                local root =
+                    getRoot()
+
+                if root then
+                    local distance =
+                        (
+                            root.Position
+                            - npc.Root.Position
+                        ).Magnitude
+
+                    if distance <= hitDistance then
+                        combatClick(
+                            meleeHoldTime
+                        )
+                    end
+                end
+            end
+        end
+
+        task.wait(meleeInterval)
+    end
+end)
 
 -- respawn
 
@@ -1396,9 +1370,7 @@ local function returnToFarmAfterRespawn()
     respawning = true
 
     task.spawn(function()
-        pcall(
-            combatRelease
-        )
+        pcall(combatRelease)
 
         waitForAliveCharacter()
 
@@ -1421,19 +1393,17 @@ local function returnToFarmAfterRespawn()
         currentFarmTarget =
             nil
 
-        -- If we're still farming the same
-        -- region, spawn was already set.
-        -- Just reacquire the NPC.
+        -- spawn should already be set to the
+        -- farm region, so just reacquire NPC
 
         if regionName then
             print(
-                "[FARM] Respawn -> waiting for",
+                "[NPC] Respawn waiting for:",
                 targetName
             )
 
             while autoFarm
-                and generation
-                == farmGeneration
+                and generation == farmGeneration
             do
                 local npc =
                     select(
@@ -1450,12 +1420,10 @@ local function returnToFarmAfterRespawn()
                     currentFarmTarget =
                         npc
 
-                    positionAtNPC(
-                        npc
-                    )
+                    positionAtNPC(npc)
 
                     print(
-                        "[FARM] Respawn ->",
+                        "[NPC] Respawn ->",
                         npc.Name
                     )
 
@@ -1470,204 +1438,21 @@ local function returnToFarmAfterRespawn()
     end)
 end
 
-Player.CharacterRemoving:Connect(
-    function()
-        currentFarmTarget =
-            nil
+Player.CharacterRemoving:Connect(function()
+    currentFarmTarget = nil
 
-        pcall(
-            combatRelease
-        )
-    end
-)
+    pcall(combatRelease)
+end)
 
-Player.CharacterAdded:Connect(
-    function()
-        if autoFarm then
-            task.spawn(function()
-                task.wait(0.1)
-
-                returnToFarmAfterRespawn()
-            end)
-        end
-    end
-)
-
--- melee
-
-combatTab:CreateSection({
-    name = "Auto Melee"
-})
-
-combatTab:CreateSlider({
-    name = "Click Interval",
-
-    range = {0.03, 0.25},
-    increment = 0.01,
-    currentValue = 0.05,
-
-    callback = function(value)
-        meleeInterval = value
-    end
-})
-
-combatTab:CreateSlider({
-    name = "Click Hold Time",
-
-    range = {0.01, 0.08},
-    increment = 0.005,
-    currentValue = 0.015,
-
-    callback = function(value)
-        meleeHoldTime = value
-    end
-})
-
-combatTab:CreateToggle({
-    name = "Auto Melee",
-    currentValue = true,
-
-    callback = function(value)
-        autoMelee = value
-
-        if not value then
-            pcall(
-                combatRelease
-            )
-        end
-    end
-})
-
-combatTab:CreateButton({
-    name = "Test One Melee Click",
-
-    callback = function()
+Player.CharacterAdded:Connect(function()
+    if autoFarm then
         task.spawn(function()
-            combatClick(
-                meleeHoldTime
-            )
+            task.wait(0.1)
+
+            returnToFarmAfterRespawn()
         end)
     end
-})
-
-task.spawn(function()
-    while true do
-        if autoFarm
-            and autoMelee
-            and not respawning
-            and characterAlive()
-        then
-            local npc =
-                currentFarmTarget
-
-            if targetIsValid(npc) then
-                local root =
-                    getRoot()
-
-                if root then
-                    local distance =
-                        (
-                            root.Position
-                            - npc.Root.Position
-                        ).Magnitude
-
-                    if distance
-                        <= hitDistance
-                    then
-                        combatClick(
-                            meleeHoldTime
-                        )
-                    end
-                end
-            end
-        end
-
-        task.wait(
-            meleeInterval
-        )
-    end
 end)
-
--- block
-
-local SignalEvent = nil
-
-pcall(function()
-    SignalEvent =
-        RS:WaitForChild(
-            "Communication"
-        )
-        :WaitForChild(
-            "ServerAndClient"
-        )
-        :WaitForChild(
-            "Signals"
-        )
-        :WaitForChild(
-            "SignalEvent"
-        )
-        :WaitForChild(
-            "Event"
-        )
-end)
-
-local function holdBlock()
-    if not SignalEvent
-        or not characterAlive()
-    then
-        return
-    end
-
-    local root =
-        getRoot()
-
-    if root then
-        SignalEvent:FireServer(
-            "server_skill_controller_signaler",
-            "Blocking",
-            "Hold",
-            root.Position
-        )
-    end
-end
-
-local function releaseBlock()
-    if not SignalEvent
-        or not characterAlive()
-    then
-        return
-    end
-
-    local root =
-        getRoot()
-
-    if root then
-        SignalEvent:FireServer(
-            "server_skill_controller_signaler",
-            "Blocking",
-            "UnHold",
-            root.Position,
-            nil
-        )
-    end
-end
-
-combatTab:CreateSection({
-    name = "Blocking"
-})
-
-combatTab:CreateToggle({
-    name = "Auto Block",
-    currentValue = false,
-
-    callback = function(value)
-        if value then
-            holdBlock()
-        else
-            releaseBlock()
-        end
-    end
-})
 
 -- esp
 
@@ -1788,16 +1573,12 @@ local function createESP(
         Instance.new("TextLabel")
 
     label.Size =
-        UDim2.fromScale(
-            1,
-            1
-        )
+        UDim2.fromScale(1, 1)
 
     label.BackgroundTransparency =
         1
 
-    label.Text =
-        name
+    label.Text = name
 
     label.TextColor3 =
         Color3.fromRGB(
@@ -1806,14 +1587,9 @@ local function createESP(
             255
         )
 
-    label.TextStrokeTransparency =
-        0
-
-    label.TextSize =
-        14
-
-    label.Font =
-        Enum.Font.GothamBold
+    label.TextStrokeTransparency = 0
+    label.TextSize = 14
+    label.Font = Enum.Font.GothamBold
 
     label.Parent =
         billboard
@@ -1844,13 +1620,10 @@ local function removeESP(object)
         data.Billboard:Destroy()
     end
 
-    ESPObjects[object] =
-        nil
+    ESPObjects[object] = nil
 end
 
-local function clearESP(
-    stationary
-)
+local function clearESP(stationary)
     local remove = {}
 
     for object, data in pairs(
@@ -1866,9 +1639,7 @@ local function clearESP(
         end
     end
 
-    for _, object in ipairs(
-        remove
-    ) do
+    for _, object in ipairs(remove) do
         removeESP(object)
     end
 end
@@ -1877,9 +1648,6 @@ local function scanActiveESP()
     if not activeESP then
         return
     end
-
-    -- same live NPC resolver used
-    -- by Auto Farm
 
     for _, npc in ipairs(
         getAllLiveNPCs()
@@ -1902,36 +1670,40 @@ local function scanStationaryESP()
     for _, region in ipairs(
         DebreeRegions:GetChildren()
     ) do
-        local folder =
-            region:FindFirstChild(
-                "StationaryNpcs"
-            )
+        -- Misc ignored here too
 
-        if folder then
-            for _, entry in ipairs(
-                folder:GetChildren()
-            ) do
-                local npc =
-                    resolveNPC(
-                        entry,
-                        region.Name
-                    )
+        if not IGNORED_NPC_REGIONS[
+            region.Name
+        ] then
+            local folder =
+                region:FindFirstChild(
+                    "StationaryNpcs"
+                )
 
-                if npc then
-                    createESP(
-                        npc.Character,
-                        npc.Name,
-                        true
-                    )
+            if folder then
+                for _, entry in ipairs(
+                    folder:GetChildren()
+                ) do
+                    local npc =
+                        resolveNPC(
+                            entry,
+                            region.Name
+                        )
 
-                elseif getObjectRoot(
-                    entry
-                ) then
-                    createESP(
-                        entry,
-                        entry.Name,
-                        true
-                    )
+                    if npc then
+                        createESP(
+                            npc.Character,
+                            npc.Name,
+                            true
+                        )
+
+                    elseif getObjectRoot(entry) then
+                        createESP(
+                            entry,
+                            entry.Name,
+                            true
+                        )
+                    end
                 end
             end
         end
@@ -2001,8 +1773,7 @@ task.spawn(function()
         for object, data in pairs(
             ESPObjects
         ) do
-            if not object
-                or not object.Parent
+            if not object.Parent
                 or not data.Root
                 or not data.Root.Parent
             then
@@ -2025,19 +1796,13 @@ task.spawn(function()
                     data.Label.Text =
                         data.Name
                         .. "\n"
-                        .. tostring(
-                            math.floor(
-                                distance
-                            )
-                        )
+                        .. math.floor(distance)
                         .. " studs"
                 end
             end
         end
 
-        for _, object in ipairs(
-            remove
-        ) do
+        for _, object in ipairs(remove) do
             removeESP(object)
         end
     end
@@ -2066,8 +1831,7 @@ areasTab:CreateDropdown({
     currentOption = selectedArea,
 
     callback = function(value)
-        selectedArea =
-            value
+        selectedArea = value
     end
 })
 
@@ -2080,14 +1844,6 @@ areasTab:CreateButton({
         end
 
         task.spawn(function()
-            window:Notify({
-                title = "Area",
-                content =
-                    "Loading "
-                    .. selectedArea
-                    .. "..."
-            })
-
             local success =
                 teleportToRegion(
                     selectedArea,
@@ -2135,12 +1891,56 @@ areasTab:CreateButton({
 local speedEnabled = false
 local speedAmount = 50
 
+local originalWalkSpeed = nil
+local speedHumanoid = nil
+
+local function applyWalkSpeed()
+    if not speedEnabled then
+        return
+    end
+
+    local humanoid =
+        getHumanoid()
+
+    if not humanoid then
+        return
+    end
+
+    -- new character / respawn
+
+    if speedHumanoid ~= humanoid then
+        speedHumanoid =
+            humanoid
+
+        originalWalkSpeed =
+            humanoid.WalkSpeed
+    end
+
+    humanoid.WalkSpeed =
+        speedAmount
+end
+
+local function restoreWalkSpeed()
+    local humanoid =
+        getHumanoid()
+
+    if humanoid
+        and originalWalkSpeed
+    then
+        humanoid.WalkSpeed =
+            originalWalkSpeed
+    end
+
+    speedHumanoid = nil
+    originalWalkSpeed = nil
+end
+
 movementTab:CreateSection({
-    name = "Speed"
+    name = "WalkSpeed"
 })
 
 movementTab:CreateSlider({
-    name = "Speed Amount",
+    name = "WalkSpeed",
 
     range = {16, 300},
     increment = 2,
@@ -2149,65 +1949,72 @@ movementTab:CreateSlider({
     callback = function(value)
         speedAmount =
             value
+
+        if speedEnabled then
+            applyWalkSpeed()
+        end
     end
 })
 
 movementTab:CreateToggle({
-    name = "Speed",
+    name = "WalkSpeed",
     currentValue = false,
 
     callback = function(value)
         speedEnabled =
             value
+
+        if value then
+            speedHumanoid = nil
+            originalWalkSpeed = nil
+
+            applyWalkSpeed()
+        else
+            restoreWalkSpeed()
+        end
     end
 })
 
-RunService:BindToRenderStep(
-    "NPCPlaytestSpeed",
-    Enum.RenderPriority.Character.Value + 1,
+-- keep selected WalkSpeed applied.
+-- This also handles game scripts attempting
+-- to restore the normal value.
 
-    function(dt)
-        if not speedEnabled
-            or autoFarm
-            or not characterAlive()
+task.spawn(function()
+    while task.wait(0.1) do
+        if speedEnabled
+            and characterAlive()
         then
-            return
+            applyWalkSpeed()
         end
+    end
+end)
 
+-- reapply WalkSpeed after respawn
+
+Player.CharacterAdded:Connect(function(character)
+    if not speedEnabled then
+        return
+    end
+
+    task.spawn(function()
         local humanoid =
-            getHumanoid()
-
-        local root =
-            getRoot()
-
-        if not humanoid
-            or not root
-        then
-            return
-        end
-
-        local direction =
-            humanoid.MoveDirection
-
-        if direction.Magnitude
-            <= 0.01
-        then
-            return
-        end
-
-        local extra =
-            math.max(
-                0,
-                speedAmount - 16
+            character:WaitForChild(
+                "Humanoid",
+                10
             )
 
-        root.CFrame =
-            root.CFrame
-            + direction.Unit
-            * extra
-            * dt
-    end
-)
+        if humanoid
+            and speedEnabled
+        then
+            speedHumanoid = nil
+            originalWalkSpeed = nil
+
+            task.wait(0.1)
+
+            applyWalkSpeed()
+        end
+    end)
+end)
 
 -- fly
 
@@ -2226,8 +2033,7 @@ movementTab:CreateSlider({
     currentValue = 50,
 
     callback = function(value)
-        flySpeed =
-            value
+        flySpeed = value
     end
 })
 
@@ -2236,8 +2042,7 @@ movementTab:CreateToggle({
     currentValue = false,
 
     callback = function(value)
-        flyEnabled =
-            value
+        flyEnabled = value
 
         if not value
             and characterAlive()
@@ -2253,93 +2058,81 @@ movementTab:CreateToggle({
     end
 })
 
-RunService.RenderStepped:Connect(
-    function(dt)
-        if not flyEnabled
-            or autoFarm
-            or not characterAlive()
-        then
-            return
-        end
-
-        local root =
-            getRoot()
-
-        local camera =
-            workspace.CurrentCamera
-
-        if not root
-            or not camera
-        then
-            return
-        end
-
-        local direction =
-            Vector3.zero
-
-        if UIS:IsKeyDown(
-            Enum.KeyCode.W
-        ) then
-            direction +=
-                camera.CFrame.LookVector
-        end
-
-        if UIS:IsKeyDown(
-            Enum.KeyCode.S
-        ) then
-            direction -=
-                camera.CFrame.LookVector
-        end
-
-        if UIS:IsKeyDown(
-            Enum.KeyCode.D
-        ) then
-            direction +=
-                camera.CFrame.RightVector
-        end
-
-        if UIS:IsKeyDown(
-            Enum.KeyCode.A
-        ) then
-            direction -=
-                camera.CFrame.RightVector
-        end
-
-        if UIS:IsKeyDown(
-            Enum.KeyCode.Space
-        ) then
-            direction +=
-                Vector3.yAxis
-        end
-
-        if UIS:IsKeyDown(
-            Enum.KeyCode.LeftControl
-        ) then
-            direction -=
-                Vector3.yAxis
-        end
-
-        if direction.Magnitude > 0 then
-            root.CFrame =
-                root.CFrame
-                + direction.Unit
-                * flySpeed
-                * dt
-        end
-
-        root.AssemblyLinearVelocity =
-            Vector3.zero
+RunService.RenderStepped:Connect(function(dt)
+    if not flyEnabled
+        or autoFarm
+        or not characterAlive()
+    then
+        return
     end
-)
+
+    local root =
+        getRoot()
+
+    local camera =
+        workspace.CurrentCamera
+
+    if not root
+        or not camera
+    then
+        return
+    end
+
+    local direction =
+        Vector3.zero
+
+    if UIS:IsKeyDown(Enum.KeyCode.W) then
+        direction +=
+            camera.CFrame.LookVector
+    end
+
+    if UIS:IsKeyDown(Enum.KeyCode.S) then
+        direction -=
+            camera.CFrame.LookVector
+    end
+
+    if UIS:IsKeyDown(Enum.KeyCode.D) then
+        direction +=
+            camera.CFrame.RightVector
+    end
+
+    if UIS:IsKeyDown(Enum.KeyCode.A) then
+        direction -=
+            camera.CFrame.RightVector
+    end
+
+    if UIS:IsKeyDown(Enum.KeyCode.Space) then
+        direction +=
+            Vector3.yAxis
+    end
+
+    if UIS:IsKeyDown(
+        Enum.KeyCode.LeftControl
+    ) then
+        direction -=
+            Vector3.yAxis
+    end
+
+    if direction.Magnitude > 0 then
+        root.CFrame =
+            root.CFrame
+            + direction.Unit
+            * flySpeed
+            * dt
+    end
+
+    root.AssemblyLinearVelocity =
+        Vector3.zero
+end)
 
 -- ready
 
 window:Notify({
-    title = "NPC Playtest",
+    title = "ScriptsRBX.om",
     content = "Dynamic NPC farm loaded."
 })
 
-print("[NPC PLAYTEST] Loaded.")
+print("[ScriptsRBX.om] Loaded.")
 
 for _, name in ipairs(
     discoveredNPCs
