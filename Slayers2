@@ -14,8 +14,8 @@ local Humanoids = workspace:WaitForChild("Humanoids")
 local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
 
 local window = Rayfield:CreateWindow({
-    name = "Slayers 2",
-    subtitle = "ScriptsRBX.com",
+    name = "ScriptsRBX.com",
+    subtitle = "Slayers 2",
     sidebarLayout = true,
     theme = "cobalt"
 })
@@ -196,11 +196,48 @@ local function findSpawnCrystal(region)
     return nil
 end
 
+local function getCrystalCFrame(crystal)
+    if not crystal then
+        return nil
+    end
+
+    if crystal:IsA("BasePart") then
+        return crystal.CFrame
+    end
+
+    if crystal:IsA("Attachment") then
+        return crystal.WorldCFrame
+    end
+
+    if crystal:IsA("Model") then
+        local ok, pivot =
+            pcall(function()
+                return crystal:GetPivot()
+            end)
+
+        if ok and pivot then
+            return pivot
+        end
+    end
+
+    local part =
+        crystal:FindFirstChildWhichIsA(
+            "BasePart",
+            true
+        )
+
+    if part then
+        return part.CFrame
+    end
+
+    return nil
+end
+
 local function waitForSpawnCrystal(
     regionName,
     timeout
 )
-    timeout = timeout or 15
+    timeout = timeout or 20
 
     local started = os.clock()
 
@@ -213,33 +250,8 @@ local function waitForSpawnCrystal(
                 findSpawnCrystal(region)
 
             if crystal then
-                local cf = nil
-
-                if crystal:IsA("BasePart") then
-                    cf = crystal.CFrame
-
-                elseif crystal:IsA("Model") then
-                    local ok, pivot =
-                        pcall(function()
-                            return crystal:GetPivot()
-                        end)
-
-                    if ok then
-                        cf = pivot
-                    end
-                end
-
-                if not cf then
-                    local part =
-                        crystal:FindFirstChildWhichIsA(
-                            "BasePart",
-                            true
-                        )
-
-                    if part then
-                        cf = part.CFrame
-                    end
-                end
+                local cf =
+                    getCrystalCFrame(crystal)
 
                 if cf then
                     return crystal, cf
@@ -268,27 +280,40 @@ local function findSpawnPrompt(regionName)
         return nil
     end
 
+    -- exact structure:
+    -- SpawnCrystal.Root.At["Region"]
+
     local root =
         crystal:FindFirstChild("Root")
 
-    if not root then
-        return nil
+    if root then
+        local at =
+            root:FindFirstChild("At")
+
+        if at then
+            local prompt =
+                at:FindFirstChild(regionName)
+
+            if prompt
+                and prompt:IsA("ProximityPrompt")
+            then
+                return prompt
+            end
+        end
     end
 
-    local at =
-        root:FindFirstChild("At")
+    -- fallback
 
-    if not at then
-        return nil
-    end
-
-    local exact =
-        at:FindFirstChild(regionName)
-
-    if exact
-        and exact:IsA("ProximityPrompt")
-    then
-        return exact
+    for _, object in ipairs(
+        crystal:GetDescendants()
+    ) do
+        if object:IsA("ProximityPrompt")
+            and object.ActionText == "Set Spawn"
+        then
+            if object.Name == regionName then
+                return object
+            end
+        end
     end
 
     return nil
@@ -298,7 +323,7 @@ local function waitForSpawnPrompt(
     regionName,
     timeout
 )
-    timeout = timeout or 20
+    timeout = timeout or 30
 
     local started = os.clock()
 
@@ -338,7 +363,7 @@ local function activateSpawnPrompt(regionName)
     local prompt =
         waitForSpawnPrompt(
             regionName,
-            20
+            30
         )
 
     if not prompt then
@@ -381,9 +406,7 @@ local function activateSpawnPrompt(regionName)
         return false
     end
 
-    -- let server process spawn change
-
-    task.wait(1)
+    task.wait(1.25)
 
     print(
         "[NPC] Spawn set:",
@@ -397,43 +420,41 @@ local function teleportToRegion(
     regionName,
     setSpawn
 )
-    if not characterAlive() then
+    local _, _, playerRoot =
         waitForAliveCharacter()
-    end
 
     local crystal, cf =
         waitForSpawnCrystal(
             regionName,
-            15
+            20
         )
 
     if not crystal or not cf then
         warn(
-            "[NPC] Crystal timeout:",
+            "[NPC] Crystal not loaded:",
             regionName
         )
 
         return false
     end
 
-    local _, _, root =
-        waitForAliveCharacter()
+    -- teleport near crystal first so
+    -- its descendants can stream in
 
-    root.CFrame =
+    playerRoot.CFrame =
         cf * CFrame.new(0, 4, 0)
 
-    root.AssemblyLinearVelocity =
+    playerRoot.AssemblyLinearVelocity =
         Vector3.zero
 
-    root.AssemblyAngularVelocity =
+    playerRoot.AssemblyAngularVelocity =
         Vector3.zero
-
-    -- being close causes the rest of the crystal
-    -- structure to stream in
 
     if setSpawn then
         local success =
-            activateSpawnPrompt(regionName)
+            activateSpawnPrompt(
+                regionName
+            )
 
         if not success then
             return false
@@ -486,6 +507,30 @@ local function displayNPCName(name)
     return value
 end
 
+local function getRegionActiveNPCs(
+    regionName
+)
+    local regions =
+        getHumanoidRegions()
+
+    if not regions then
+        return nil
+    end
+
+    local region =
+        regions:FindFirstChild(
+            regionName
+        )
+
+    if not region then
+        return nil
+    end
+
+    return region:FindFirstChild(
+        "ActiveNpcs"
+    )
+end
+
 local function resolveCharacter(
     object,
     controller,
@@ -531,9 +576,7 @@ local function resolveCharacter(
         Character = object,
         Humanoid = humanoid,
         Root = root,
-
         Region = regionName,
-
         RawName = object.Name,
         Name = displayNPCName(
             object.Name
@@ -549,7 +592,7 @@ local function resolveNPC(
         return nil
     end
 
-    -- npc itself may be the entry
+    -- entry itself may be the NPC
 
     local direct =
         resolveCharacter(
@@ -562,16 +605,7 @@ local function resolveNPC(
         return direct
     end
 
-    -- known structure:
-    --
-    -- ActiveNpcs
-    --   Controller
-    --     Bear Cub
-    --       Humanoid
-    --       HumanoidRootPart
-    --
-    -- same structure works for Bandit,
-    -- *Civilian*, Zuko, etc.
+    -- controller -> actual NPC model
 
     for _, child in ipairs(
         entry:GetChildren()
@@ -602,30 +636,6 @@ local function targetIsValid(npc)
         and npc.Humanoid.Health > 0
         and npc.Root
         and npc.Root.Parent
-end
-
-local function getRegionActiveNPCs(
-    regionName
-)
-    local regions =
-        getHumanoidRegions()
-
-    if not regions then
-        return nil
-    end
-
-    local region =
-        regions:FindFirstChild(
-            regionName
-        )
-
-    if not region then
-        return nil
-    end
-
-    return region:FindFirstChild(
-        "ActiveNpcs"
-    )
 end
 
 local function getRegionNPCs(
@@ -703,78 +713,162 @@ local function getAllLiveNPCs()
     return result
 end
 
-local function refreshNPCs()
-    local npcs =
-        getAllLiveNPCs()
+-- npc discovery
 
-    local counts = {}
-    local regionCounts = {}
+local npcRegionMap = {}
+local npcDisplayMap = {}
 
-    for _, npc in ipairs(npcs) do
-        local name =
-            npc.Name
-
-        counts[name] =
-            (counts[name] or 0) + 1
-
-        local region =
-            npc.Region or "Unknown"
-
-        regionCounts[region] =
-            (regionCounts[region] or 0) + 1
+local function getControllerNPCName(
+    controller
+)
+    if not controller then
+        return nil
     end
 
-    local names = {}
+    -- actual NPC already loaded
 
-    for name in pairs(counts) do
-        table.insert(
-            names,
-            name
+    local npc =
+        resolveNPC(
+            controller,
+            nil
         )
+
+    if npc then
+        return npc.Name
+    end
+
+    -- otherwise use controller name
+
+    local controllerName =
+        displayNPCName(
+            controller.Name
+        )
+
+    -- NPC model may exist before Humanoid
+    -- or HRP has completely loaded
+
+    for _, child in ipairs(
+        controller:GetChildren()
+    ) do
+        local childName =
+            displayNPCName(
+                child.Name
+            )
+
+        local lower =
+            string.lower(
+                childName
+            )
+
+        if childName ~= ""
+            and lower ~= "script"
+            and lower ~= "npcconfig"
+            and lower ~= "aisignal"
+            and lower ~= "getdatabindable"
+            and lower ~= "initialposes"
+        then
+            if child:IsA("Model") then
+                return childName
+            end
+        end
+    end
+
+    return controllerName
+end
+
+local function discoverNPCs()
+    local regions =
+        getHumanoidRegions()
+
+    local names = {}
+    local seen = {}
+
+    npcRegionMap = {}
+    npcDisplayMap = {}
+
+    if not regions then
+        return names
+    end
+
+    for _, region in ipairs(
+        regions:GetChildren()
+    ) do
+        local active =
+            region:FindFirstChild(
+                "ActiveNpcs"
+            )
+
+        if active then
+            for _, controller in ipairs(
+                active:GetChildren()
+            ) do
+                local name =
+                    getControllerNPCName(
+                        controller
+                    )
+
+                if name and name ~= "" then
+                    local key =
+                        cleanNPCName(name)
+
+                    if key ~= "" then
+                        if not npcRegionMap[key] then
+                            npcRegionMap[key] =
+                                region.Name
+                        end
+
+                        npcDisplayMap[key] =
+                            name
+
+                        if not seen[key] then
+                            seen[key] = true
+
+                            table.insert(
+                                names,
+                                name
+                            )
+                        end
+                    end
+                end
+            end
+        end
     end
 
     table.sort(names)
+
+    return names
+end
+
+local function refreshNPCDiscovery()
+    local names =
+        discoverNPCs()
+
+    print(
+        "[NPC] Discovered:",
+        #names
+    )
 
     for _, name in ipairs(names) do
         print(
             "[NPC]",
             name,
-            "x" .. tostring(
-                counts[name]
-            )
+            "->",
+            npcRegionMap[
+                cleanNPCName(name)
+            ] or "?"
         )
     end
 
-    local regionNames = {}
+    return names
+end
 
-    for region in pairs(
-        regionCounts
-    ) do
-        table.insert(
-            regionNames,
-            region
-        )
-    end
+local discoveredNPCs =
+    discoverNPCs()
 
-    table.sort(regionNames)
-
-    for _, region in ipairs(
-        regionNames
-    ) do
-        print(
-            "[NPC]",
-            region,
-            "total:",
-            regionCounts[region]
-        )
-    end
-
-    print(
-        "[NPC] Total:",
-        #npcs
-    )
-
-    return npcs
+if #discoveredNPCs == 0 then
+    discoveredNPCs = {
+        "No NPCs Loaded"
+    }
 end
 
 -- combat
@@ -813,7 +907,9 @@ local function combatRelease()
     end)
 end
 
-local function combatClick(holdTime)
+local function combatClick(
+    holdTime
+)
     combatPress()
 
     task.wait(
@@ -826,7 +922,9 @@ end
 -- farm
 
 local selectedNPC =
-    "Nearest Active NPC"
+    discoveredNPCs[1]
+
+local selectedFarmRegion = nil
 
 local autoFarm = false
 local autoMelee = true
@@ -840,35 +938,41 @@ local meleeHoldTime = 0.015
 
 local currentFarmTarget = nil
 
-local respawning = false
 local farmGeneration = 0
+local respawning = false
 
-local function npcMatchesSelection(npc)
+local function selectedNPCMatches(
+    npc,
+    targetName
+)
     if not targetIsValid(npc) then
         return false
     end
 
-    if selectedNPC
-        == "Nearest Active NPC"
-    then
-        return true
-    end
+    targetName =
+        targetName or selectedNPC
 
-    return cleanNPCName(npc.Name)
-        == cleanNPCName(
-            selectedNPC
-        )
+    return cleanNPCName(
+        npc.Name
+    ) == cleanNPCName(
+        targetName
+    )
 end
 
-local function acquireFarmTarget()
-    if not characterAlive() then
+local function findNPCInRegion(
+    regionName,
+    targetName
+)
+    if not regionName
+        or not targetName
+    then
         return nil, math.huge
     end
 
-    local root =
+    local playerRoot =
         getRoot()
 
-    if not root then
+    if not playerRoot then
         return nil, math.huge
     end
 
@@ -876,17 +980,18 @@ local function acquireFarmTarget()
     local bestDistance =
         math.huge
 
-    -- IMPORTANT:
-    -- fresh scan every time.
-    -- same hierarchy ESP scans.
+    -- fresh ActiveNpcs scan
 
     for _, npc in ipairs(
-        getAllLiveNPCs()
+        getRegionNPCs(regionName)
     ) do
-        if npcMatchesSelection(npc) then
+        if selectedNPCMatches(
+            npc,
+            targetName
+        ) then
             local distance =
                 (
-                    root.Position
+                    playerRoot.Position
                     - npc.Root.Position
                 ).Magnitude
 
@@ -917,11 +1022,8 @@ local function positionAtNPC(npc)
         return false
     end
 
-    local npcPosition =
-        npc.Root.Position
-
     local targetPosition =
-        npcPosition
+        npc.Root.Position
         + Vector3.new(
             0,
             farmHeight,
@@ -942,6 +1044,225 @@ local function positionAtNPC(npc)
     return true
 end
 
+local function prepareFarmGeneration(
+    generation,
+    targetName
+)
+    -- refresh NPC -> region mapping
+
+    discoverNPCs()
+
+    if not autoFarm
+        or generation
+        ~= farmGeneration
+    then
+        return false
+    end
+
+    local regionName =
+        npcRegionMap[
+            cleanNPCName(
+                targetName
+            )
+        ]
+
+    if not regionName then
+        warn(
+            "[NPC] No region found for:",
+            targetName
+        )
+
+        return false
+    end
+
+    selectedFarmRegion =
+        regionName
+
+    print(
+        "[FARM]",
+        targetName,
+        "->",
+        regionName
+    )
+
+    -- teleport to correct island
+    -- and set spawn
+
+    local success =
+        teleportToRegion(
+            regionName,
+            true
+        )
+
+    -- target may have changed while
+    -- crystal/prompt was loading
+
+    if not autoFarm
+        or generation
+        ~= farmGeneration
+    then
+        return false
+    end
+
+    if not success then
+        warn(
+            "[NPC] Could not prepare:",
+            regionName
+        )
+
+        return false
+    end
+
+    print(
+        "[NPC] Waiting for:",
+        targetName
+    )
+
+    -- wait for actual target character
+    -- Humanoid + HRP to stream
+
+    while autoFarm
+        and generation
+        == farmGeneration
+    do
+        local npc =
+            select(
+                1,
+                findNPCInRegion(
+                    regionName,
+                    targetName
+                )
+            )
+
+        if npc
+            and targetIsValid(npc)
+        then
+            currentFarmTarget =
+                npc
+
+            positionAtNPC(npc)
+
+            print(
+                "[NPC] Loaded:",
+                npc.Name
+            )
+
+            return true
+        end
+
+        task.wait(0.15)
+    end
+
+    return false
+end
+
+local function startFarmGeneration()
+    if not autoFarm then
+        return
+    end
+
+    farmGeneration += 1
+
+    local generation =
+        farmGeneration
+
+    local targetName =
+        selectedNPC
+
+    currentFarmTarget = nil
+    selectedFarmRegion = nil
+
+    pcall(
+        combatRelease
+    )
+
+    print(
+        "[FARM] Switching to:",
+        targetName
+    )
+
+    task.spawn(function()
+        -- prepare selected NPC's island
+
+        local prepared =
+            prepareFarmGeneration(
+                generation,
+                targetName
+            )
+
+        if not prepared
+            or not autoFarm
+            or generation
+            ~= farmGeneration
+        then
+            return
+        end
+
+        -- continuously farm selected NPC
+
+        while autoFarm
+            and generation
+            == farmGeneration
+        do
+            if not characterAlive()
+                or respawning
+            then
+                task.wait(0.1)
+                continue
+            end
+
+            if not targetIsValid(
+                currentFarmTarget
+            )
+                or not selectedNPCMatches(
+                    currentFarmTarget,
+                    targetName
+                )
+            then
+                currentFarmTarget =
+                    nil
+            end
+
+            -- same live ActiveNpcs scan as ESP
+
+            local npc, distance =
+                findNPCInRegion(
+                    selectedFarmRegion,
+                    targetName
+                )
+
+            if npc
+                and targetIsValid(npc)
+                and distance
+                <= maxTargetDistance
+            then
+                currentFarmTarget =
+                    npc
+
+                positionAtNPC(
+                    npc
+                )
+            else
+                -- dead / respawning NPC:
+                -- stay on island and keep
+                -- scanning for replacement
+
+                currentFarmTarget =
+                    nil
+            end
+
+            task.wait(0.05)
+        end
+
+        if generation
+            == farmGeneration
+        then
+            currentFarmTarget =
+                nil
+        end
+    end)
+end
+
 -- farm ui
 
 farmTab:CreateSection({
@@ -951,25 +1272,44 @@ farmTab:CreateSection({
 farmTab:CreateDropdown({
     name = "NPC",
 
-    options = {
-        "Nearest Active NPC",
-        "Bandit",
-        "Civilian",
-        "Zuko",
-        "Bear Cub",
-        "Hoyuzo",
-        "Hoyuzo Subordinate",
-        "Kaiden",
-        "Kaiden Subordinate",
-        "Mother Bear"
-    },
-
-    currentOption =
-        "Nearest Active NPC",
+    options = discoveredNPCs,
+    currentOption = selectedNPC,
 
     callback = function(value)
-        selectedNPC = value
-        currentFarmTarget = nil
+        if not value
+            or value == "No NPCs Loaded"
+        then
+            return
+        end
+
+        if value == selectedNPC then
+            return
+        end
+
+        selectedNPC =
+            value
+
+        currentFarmTarget =
+            nil
+
+        selectedFarmRegion =
+            nil
+
+        print(
+            "[FARM] New target:",
+            selectedNPC
+        )
+
+        -- IMPORTANT:
+        -- Auto Farm already ON?
+        -- Immediately restart for the
+        -- newly selected NPC.
+
+        if autoFarm then
+            startFarmGeneration()
+        else
+            discoverNPCs()
+        end
     end
 })
 
@@ -981,14 +1321,14 @@ farmTab:CreateButton({
     name = "Refresh NPCs",
 
     callback = function()
-        local npcs =
-            refreshNPCs()
+        local names =
+            refreshNPCDiscovery()
 
         window:Notify({
             title = "NPC Refresh",
             content =
-                tostring(#npcs)
-                .. " active NPCs found."
+                tostring(#names)
+                .. " NPC types discovered."
         })
     end
 })
@@ -1028,72 +1368,21 @@ farmTab:CreateToggle({
     callback = function(value)
         autoFarm = value
 
-        farmGeneration += 1
+        if value then
+            startFarmGeneration()
+        else
+            -- invalidate every currently
+            -- running farm generation
 
-        local generation =
-            farmGeneration
+            farmGeneration += 1
 
-        if not value then
             currentFarmTarget = nil
+            selectedFarmRegion = nil
 
             pcall(
                 combatRelease
             )
-
-            return
         end
-
-        task.spawn(function()
-            while autoFarm
-                and generation
-                == farmGeneration
-            do
-                if not characterAlive()
-                    or respawning
-                then
-                    RunService.Heartbeat:Wait()
-                    continue
-                end
-
-                -- discard dead / removed npc
-
-                if not targetIsValid(
-                    currentFarmTarget
-                )
-                    or not npcMatchesSelection(
-                        currentFarmTarget
-                    )
-                then
-                    currentFarmTarget =
-                        nil
-                end
-
-                -- fresh scan EVERY cycle
-
-                local target, distance =
-                    acquireFarmTarget()
-
-                if target
-                    and targetIsValid(target)
-                    and distance
-                    <= maxTargetDistance
-                then
-                    currentFarmTarget =
-                        target
-
-                    positionAtNPC(
-                        target
-                    )
-                else
-                    currentFarmTarget =
-                        nil
-                end
-
-                RunService.Heartbeat:Wait()
-            end
-
-            currentFarmTarget = nil
-        end)
     end
 })
 
@@ -1113,8 +1402,6 @@ local function returnToFarmAfterRespawn()
 
         waitForAliveCharacter()
 
-        -- let character finish loading
-
         task.wait(0.75)
 
         if not autoFarm then
@@ -1122,39 +1409,61 @@ local function returnToFarmAfterRespawn()
             return
         end
 
-        currentFarmTarget = nil
+        local generation =
+            farmGeneration
 
-        local timeout =
-            os.clock() + 15
+        local targetName =
+            selectedNPC
 
-        while autoFarm
-            and os.clock() < timeout
-        do
-            local target =
-                select(
-                    1,
-                    acquireFarmTarget()
-                )
+        local regionName =
+            selectedFarmRegion
 
-            if target
-                and targetIsValid(target)
-            then
-                currentFarmTarget =
-                    target
+        currentFarmTarget =
+            nil
 
-                positionAtNPC(
-                    target
-                )
+        -- If we're still farming the same
+        -- region, spawn was already set.
+        -- Just reacquire the NPC.
 
-                print(
-                    "[FARM] Respawn ->",
-                    target.Name
-                )
+        if regionName then
+            print(
+                "[FARM] Respawn -> waiting for",
+                targetName
+            )
 
-                break
+            while autoFarm
+                and generation
+                == farmGeneration
+            do
+                local npc =
+                    select(
+                        1,
+                        findNPCInRegion(
+                            regionName,
+                            targetName
+                        )
+                    )
+
+                if npc
+                    and targetIsValid(npc)
+                then
+                    currentFarmTarget =
+                        npc
+
+                    positionAtNPC(
+                        npc
+                    )
+
+                    print(
+                        "[FARM] Respawn ->",
+                        npc.Name
+                    )
+
+                    break
+                end
+
+                task.wait(0.1)
             end
-
-            task.wait(0.1)
         end
 
         respawning = false
@@ -1163,7 +1472,8 @@ end
 
 Player.CharacterRemoving:Connect(
     function()
-        currentFarmTarget = nil
+        currentFarmTarget =
+            nil
 
         pcall(
             combatRelease
@@ -1301,8 +1611,6 @@ pcall(function()
         )
 end)
 
-local autoBlock = false
-
 local function holdBlock()
     if not SignalEvent
         or not characterAlive()
@@ -1313,16 +1621,14 @@ local function holdBlock()
     local root =
         getRoot()
 
-    if not root then
-        return
+    if root then
+        SignalEvent:FireServer(
+            "server_skill_controller_signaler",
+            "Blocking",
+            "Hold",
+            root.Position
+        )
     end
-
-    SignalEvent:FireServer(
-        "server_skill_controller_signaler",
-        "Blocking",
-        "Hold",
-        root.Position
-    )
 end
 
 local function releaseBlock()
@@ -1335,17 +1641,15 @@ local function releaseBlock()
     local root =
         getRoot()
 
-    if not root then
-        return
+    if root then
+        SignalEvent:FireServer(
+            "server_skill_controller_signaler",
+            "Blocking",
+            "UnHold",
+            root.Position,
+            nil
+        )
     end
-
-    SignalEvent:FireServer(
-        "server_skill_controller_signaler",
-        "Blocking",
-        "UnHold",
-        root.Position,
-        nil
-    )
 end
 
 combatTab:CreateSection({
@@ -1357,8 +1661,6 @@ combatTab:CreateToggle({
     currentValue = false,
 
     callback = function(value)
-        autoBlock = value
-
         if value then
             holdBlock()
         else
@@ -1375,18 +1677,18 @@ local stationaryESP = false
 local ESPObjects = {}
 
 local function createESP(
-    model,
+    object,
     npcName,
     stationary
 )
-    if not model
-        or ESPObjects[model]
+    if not object
+        or ESPObjects[object]
     then
         return
     end
 
     local root =
-        getObjectRoot(model)
+        getObjectRoot(object)
 
     if not root then
         return
@@ -1394,7 +1696,7 @@ local function createESP(
 
     local name =
         displayNPCName(
-            npcName or model.Name
+            npcName or object.Name
         )
 
     local highlight =
@@ -1404,7 +1706,7 @@ local function createESP(
         "_NPC_PLAYTEST_ESP"
 
     highlight.Adornee =
-        model
+        object
 
     highlight.DepthMode =
         Enum.HighlightDepthMode.AlwaysOnTop
@@ -1450,7 +1752,7 @@ local function createESP(
         )
 
     highlight.Parent =
-        model
+        object
 
     local billboard =
         Instance.new("BillboardGui")
@@ -1486,7 +1788,10 @@ local function createESP(
         Instance.new("TextLabel")
 
     label.Size =
-        UDim2.fromScale(1, 1)
+        UDim2.fromScale(
+            1,
+            1
+        )
 
     label.BackgroundTransparency =
         1
@@ -1513,7 +1818,7 @@ local function createESP(
     label.Parent =
         billboard
 
-    ESPObjects[model] = {
+    ESPObjects[object] = {
         Highlight = highlight,
         Billboard = billboard,
         Label = label,
@@ -1523,9 +1828,9 @@ local function createESP(
     }
 end
 
-local function removeESP(model)
+local function removeESP(object)
     local data =
-        ESPObjects[model]
+        ESPObjects[object]
 
     if not data then
         return
@@ -1539,13 +1844,16 @@ local function removeESP(model)
         data.Billboard:Destroy()
     end
 
-    ESPObjects[model] = nil
+    ESPObjects[object] =
+        nil
 end
 
-local function clearESP(stationary)
+local function clearESP(
+    stationary
+)
     local remove = {}
 
-    for model, data in pairs(
+    for object, data in pairs(
         ESPObjects
     ) do
         if data.Stationary
@@ -1553,13 +1861,15 @@ local function clearESP(stationary)
         then
             table.insert(
                 remove,
-                model
+                object
             )
         end
     end
 
-    for _, model in ipairs(remove) do
-        removeESP(model)
+    for _, object in ipairs(
+        remove
+    ) do
+        removeESP(object)
     end
 end
 
@@ -1568,7 +1878,8 @@ local function scanActiveESP()
         return
     end
 
-    -- exact same resolver as auto farm
+    -- same live NPC resolver used
+    -- by Auto Farm
 
     for _, npc in ipairs(
         getAllLiveNPCs()
@@ -1613,7 +1924,9 @@ local function scanStationaryESP()
                         true
                     )
 
-                elseif getObjectRoot(entry) then
+                elseif getObjectRoot(
+                    entry
+                ) then
                     createESP(
                         entry,
                         entry.Name,
@@ -1685,27 +1998,27 @@ task.spawn(function()
 
         local remove = {}
 
-        for model, data in pairs(
+        for object, data in pairs(
             ESPObjects
         ) do
-            if not model
-                or not model.Parent
+            if not object
+                or not object.Parent
                 or not data.Root
                 or not data.Root.Parent
             then
                 table.insert(
                     remove,
-                    model
+                    object
                 )
 
             elseif characterAlive() then
-                local root =
+                local playerRoot =
                     getRoot()
 
-                if root then
+                if playerRoot then
                     local distance =
                         (
-                            root.Position
+                            playerRoot.Position
                             - data.Root.Position
                         ).Magnitude
 
@@ -1713,15 +2026,19 @@ task.spawn(function()
                         data.Name
                         .. "\n"
                         .. tostring(
-                            math.floor(distance)
+                            math.floor(
+                                distance
+                            )
                         )
                         .. " studs"
                 end
             end
         end
 
-        for _, model in ipairs(remove) do
-            removeESP(model)
+        for _, object in ipairs(
+            remove
+        ) do
+            removeESP(object)
         end
     end
 end)
@@ -1749,7 +2066,8 @@ areasTab:CreateDropdown({
     currentOption = selectedArea,
 
     callback = function(value)
-        selectedArea = value
+        selectedArea =
+            value
     end
 })
 
@@ -1763,11 +2081,11 @@ areasTab:CreateButton({
 
         task.spawn(function()
             window:Notify({
-                title = "Spawn",
+                title = "Area",
                 content =
                     "Loading "
                     .. selectedArea
-                    .. " crystal..."
+                    .. "..."
             })
 
             local success =
@@ -1787,9 +2105,8 @@ areasTab:CreateButton({
                 window:Notify({
                     title = "Spawn",
                     content =
-                        "Could not set "
+                        "Failed to set "
                         .. selectedArea
-                        .. " spawn."
                 })
             end
         end)
@@ -1813,22 +2130,6 @@ areasTab:CreateButton({
     end
 })
 
-areasTab:CreateButton({
-    name = "Refresh NPCs",
-
-    callback = function()
-        local npcs =
-            refreshNPCs()
-
-        window:Notify({
-            title = "NPC Refresh",
-            content =
-                tostring(#npcs)
-                .. " active NPCs found."
-        })
-    end
-})
-
 -- movement
 
 local speedEnabled = false
@@ -1846,7 +2147,8 @@ movementTab:CreateSlider({
     currentValue = 50,
 
     callback = function(value)
-        speedAmount = value
+        speedAmount =
+            value
     end
 })
 
@@ -1855,7 +2157,8 @@ movementTab:CreateToggle({
     currentValue = false,
 
     callback = function(value)
-        speedEnabled = value
+        speedEnabled =
+            value
     end
 })
 
@@ -1923,7 +2226,8 @@ movementTab:CreateSlider({
     currentValue = 50,
 
     callback = function(value)
-        flySpeed = value
+        flySpeed =
+            value
     end
 })
 
@@ -1932,7 +2236,8 @@ movementTab:CreateToggle({
     currentValue = false,
 
     callback = function(value)
-        flyEnabled = value
+        flyEnabled =
+            value
 
         if not value
             and characterAlive()
@@ -2031,7 +2336,20 @@ RunService.RenderStepped:Connect(
 
 window:Notify({
     title = "NPC Playtest",
-    content = "Updated NPC scanner loaded."
+    content = "Dynamic NPC farm loaded."
 })
 
-print("[NPC PLAYTEST] Updated loaded.")
+print("[NPC PLAYTEST] Loaded.")
+
+for _, name in ipairs(
+    discoveredNPCs
+) do
+    print(
+        "[NPC]",
+        name,
+        "->",
+        npcRegionMap[
+            cleanNPCName(name)
+        ] or "?"
+    )
+end
