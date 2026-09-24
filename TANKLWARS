@@ -1,0 +1,2330 @@
+--============================================================
+-- TYCOON TESTER - FULL UPDATED VERSION
+-- Rayfield Gen2
+--
+-- FEATURES
+--
+-- BASE
+--   Auto Collect
+--   Auto Lock
+--   Auto Upgrade Buildings
+--   Auto Place Inventory
+--
+-- SHOP
+--   Select Buildings
+--   Select Defense
+--   Select Tanks
+--   Auto Buy ONLY selected items
+--
+-- UPGRADES
+--   Select upgrade-tree branches
+--   Auto Buy Tree
+--
+-- ATTACK
+--   Any Unlocked
+--   Closest Unlocked
+--   Selected Player
+--============================================================
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local LP = Players.LocalPlayer
+
+------------------------------------------------------------
+-- SHARED
+------------------------------------------------------------
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Remotes = Shared:WaitForChild("Remotes")
+local ConfigFolder = Shared:WaitForChild("Config")
+
+local BuildConfig =
+    require(ConfigFolder:WaitForChild("BuildConfig"))
+
+local UpgradeTreeConfig =
+    require(ConfigFolder:WaitForChild("UpgradeTreeConfig"))
+
+local PlacementMath =
+    require(Shared.Util:WaitForChild("PlacementMath"))
+
+local UpgradeEffects =
+    require(Shared.Util:WaitForChild("UpgradeEffects"))
+
+local Buildables =
+    Shared:WaitForChild("Buildables")
+
+------------------------------------------------------------
+-- REMOTES
+------------------------------------------------------------
+
+local UpgradeBuilding =
+    Remotes:WaitForChild("UpgradeBuilding")
+
+local BuyTreeUpgrade =
+    Remotes:WaitForChild("BuyTreeUpgrade")
+
+local BuyItem =
+    Remotes:WaitForChild("BuyItem")
+
+local PlaceBuild =
+    Remotes:WaitForChild("PlaceBuild")
+
+local ToggleLock =
+    Remotes:WaitForChild("ToggleLock")
+
+local StartAttack =
+    Remotes:WaitForChild("StartAttack")
+
+local ShopStock =
+    Remotes:FindFirstChild("ShopStock")
+
+------------------------------------------------------------
+-- STATE
+------------------------------------------------------------
+
+local State = {
+
+    AutoCollect = false,
+    AutoLock = false,
+    AutoUpgrade = false,
+    AutoPlace = false,
+
+    AutoBuy = false,
+
+    SelectedBuildings = {},
+    SelectedDefense = {},
+    SelectedTanks = {},
+
+    AutoTree = false,
+    SelectedTree = {},
+
+    AutoAttack = false,
+    AttackMode = "Any Unlocked",
+    SelectedPlayer = nil,
+}
+
+------------------------------------------------------------
+-- SHOP STOCK CACHE
+------------------------------------------------------------
+
+local CurrentStock = {}
+
+if ShopStock then
+
+    ShopStock.OnClientEvent:Connect(
+        function(stockTable)
+
+            if type(stockTable) == "table" then
+                CurrentStock = stockTable
+            end
+
+        end
+    )
+
+end
+
+--============================================================
+-- BASIC HELPERS
+--============================================================
+
+local function getMyPlot()
+
+    local plots =
+        Workspace:FindFirstChild("Plots")
+
+    if not plots then
+        return nil
+    end
+
+    for _, plot in ipairs(
+        plots:GetChildren()
+    ) do
+
+        if plot:GetAttribute(
+            "OwnerUserId"
+        ) == LP.UserId then
+
+            return plot
+        end
+
+    end
+
+    return nil
+end
+
+------------------------------------------------------------
+
+local function getRoot()
+
+    local character = LP.Character
+
+    if not character then
+        return nil
+    end
+
+    return character:
+        FindFirstChild("HumanoidRootPart")
+end
+
+------------------------------------------------------------
+
+local function battleActive()
+
+    local plot = getMyPlot()
+
+    if not plot then
+        return false
+    end
+
+    return plot:GetAttribute(
+        "BattleEndsAt"
+    ) ~= nil
+end
+
+--============================================================
+-- AUTO COLLECT
+--============================================================
+
+local function getIncomeBuilds()
+
+    local output = {}
+
+    local plot = getMyPlot()
+
+    if not plot then
+        return output
+    end
+
+    local builds =
+        plot:FindFirstChild("Builds")
+
+    if not builds then
+        return output
+    end
+
+    for _, build in ipairs(
+        builds:GetChildren()
+    ) do
+
+        if build:IsA("Model") then
+
+            local itemId =
+                build:GetAttribute("ItemId")
+
+            if itemId then
+
+                local ok, config =
+                    pcall(function()
+
+                        return BuildConfig.Get(
+                            itemId
+                        )
+
+                    end)
+
+                if ok
+                    and config
+                    and config.Income
+                then
+
+                    table.insert(
+                        output,
+                        build
+                    )
+                end
+
+            end
+
+        end
+
+    end
+
+    return output
+end
+
+------------------------------------------------------------
+-- The test confirmed that reaching building:GetPivot()
+-- triggers the server-side income collection.
+------------------------------------------------------------
+
+local CollectBusy = false
+
+local function collectIncome()
+
+    if CollectBusy then
+        return
+    end
+
+    if battleActive() then
+        return
+    end
+
+    local root = getRoot()
+
+    if not root then
+        return
+    end
+
+    CollectBusy = true
+
+    local originalRoot =
+        root.CFrame
+
+    local camera =
+        Workspace.CurrentCamera
+
+    local oldCameraType
+    local oldCameraCF
+    local oldSubject
+
+    --------------------------------------------------------
+    -- Keep camera still
+    --------------------------------------------------------
+
+    if camera then
+
+        oldCameraType =
+            camera.CameraType
+
+        oldCameraCF =
+            camera.CFrame
+
+        oldSubject =
+            camera.CameraSubject
+
+        camera.CameraType =
+            Enum.CameraType.Scriptable
+
+        camera.CFrame =
+            oldCameraCF
+    end
+
+    --------------------------------------------------------
+    -- Collect buildings
+    --------------------------------------------------------
+
+    for _, build in ipairs(
+        getIncomeBuilds()
+    ) do
+
+        if not State.AutoCollect then
+            break
+        end
+
+        if build.Parent
+            and root.Parent
+        then
+
+            local pivot =
+                build:GetPivot()
+
+            root.CFrame =
+                CFrame.new(
+                    pivot.Position
+                    + Vector3.new(
+                        0,
+                        2,
+                        0
+                    )
+                )
+
+            if camera
+                and oldCameraCF
+            then
+
+                camera.CFrame =
+                    oldCameraCF
+            end
+
+            task.wait(0.16)
+        end
+
+    end
+
+    --------------------------------------------------------
+    -- Return player
+    --------------------------------------------------------
+
+    if root
+        and root.Parent
+    then
+
+        root.CFrame =
+            originalRoot
+    end
+
+    task.wait()
+
+    --------------------------------------------------------
+    -- Restore camera
+    --------------------------------------------------------
+
+    if camera then
+
+        if oldCameraCF then
+            camera.CFrame =
+                oldCameraCF
+        end
+
+        if oldSubject then
+            camera.CameraSubject =
+                oldSubject
+        end
+
+        camera.CameraType =
+            oldCameraType
+            or Enum.CameraType.Custom
+    end
+
+    CollectBusy = false
+end
+
+--============================================================
+-- AUTO LOCK
+--============================================================
+
+local function autoLock()
+
+    if LP:GetAttribute(
+        "BaseLocked"
+    ) == true then
+
+        return
+    end
+
+    local plot = getMyPlot()
+
+    if not plot then
+        return
+    end
+
+    --------------------------------------------------------
+    -- Don't lock during active combat
+    --------------------------------------------------------
+
+    if plot:GetAttribute(
+        "BattleEndsAt"
+    ) ~= nil then
+
+        return
+    end
+
+    local cooldownUntil =
+        plot:GetAttribute(
+            "LockCooldownUntil"
+        ) or 0
+
+    if cooldownUntil >
+        Workspace:GetServerTimeNow()
+    then
+
+        return
+    end
+
+    ToggleLock:FireServer()
+
+    task.wait(1)
+end
+
+--============================================================
+-- AUTO UPGRADE BUILDINGS
+--============================================================
+
+local function autoUpgradeBuildings()
+
+    local plot = getMyPlot()
+
+    if not plot then
+        return
+    end
+
+    local folder =
+        plot:FindFirstChild("Builds")
+
+    if not folder then
+        return
+    end
+
+    for _, build in ipairs(
+        folder:GetChildren()
+    ) do
+
+        if not State.AutoUpgrade then
+            return
+        end
+
+        if build:IsA("Model") then
+
+            pcall(function()
+
+                UpgradeBuilding:
+                    FireServer(build)
+
+            end)
+
+            task.wait(0.27)
+        end
+
+    end
+end
+
+--============================================================
+-- INVENTORY
+--============================================================
+
+local function inventoryCounts()
+
+    local counts = {}
+
+    local function scan(container)
+
+        if not container then
+            return
+        end
+
+        for _, object in ipairs(
+            container:GetChildren()
+        ) do
+
+            if object:IsA("Tool") then
+
+                local itemId =
+                    object:GetAttribute(
+                        "ItemId"
+                    )
+
+                if itemId
+                    and BuildConfig.Get(
+                        itemId
+                    )
+                then
+
+                    counts[itemId] =
+                        (
+                            counts[itemId]
+                            or 0
+                        ) + 1
+                end
+
+            end
+
+        end
+    end
+
+    scan(
+        LP:FindFirstChildOfClass(
+            "Backpack"
+        )
+    )
+
+    scan(LP.Character)
+
+    return counts
+end
+
+------------------------------------------------------------
+
+local function inventoryCount(
+    itemId
+)
+
+    return
+        inventoryCounts()[itemId]
+        or 0
+end
+
+--============================================================
+-- AUTO PLACE
+--============================================================
+
+local function placedCount(category)
+
+    local plot = getMyPlot()
+
+    if not plot then
+        return 0
+    end
+
+    local folderName =
+        category == "Tank"
+        and "Tanks"
+        or "Builds"
+
+    local folder =
+        plot:FindFirstChild(
+            folderName
+        )
+
+    if not folder then
+        return 0
+    end
+
+    local count = 0
+
+    for _, object in ipairs(
+        folder:GetChildren()
+    ) do
+
+        if object:IsA("Model")
+            and not object:GetAttribute(
+                "_Optimistic"
+            )
+        then
+
+            count += 1
+        end
+
+    end
+
+    return count
+end
+
+------------------------------------------------------------
+
+local function templateFor(itemId)
+
+    local config =
+        BuildConfig.Get(itemId)
+
+    if not config
+        or not config.Model
+    then
+
+        return nil
+    end
+
+    return Buildables:
+        FindFirstChild(
+            config.Model
+        )
+end
+
+------------------------------------------------------------
+
+local function findFreePosition(itemId)
+
+    local plot = getMyPlot()
+
+    if not plot then
+        return nil
+    end
+
+    local main =
+        plot:FindFirstChild(
+            "MainPlotPart"
+        )
+
+    if not main then
+        return nil
+    end
+
+    local config =
+        BuildConfig.Get(itemId)
+
+    local template =
+        templateFor(itemId)
+
+    if not config
+        or not template
+    then
+
+        return nil
+    end
+
+    local footprintCF,
+          footprintSize =
+        PlacementMath.FootprintBox(
+            template
+        )
+
+    local pivotOffset =
+        template:GetPivot():
+            ToObjectSpace(
+                footprintCF
+            )
+
+    local halfX =
+        main.Size.X / 2
+
+    local halfZ =
+        main.Size.Z / 2
+
+    local margin =
+        math.max(
+            footprintSize.X,
+            footprintSize.Z
+        ) / 2 + 1
+
+    local step =
+        math.max(
+            BuildConfig.GridSize or 4,
+            math.min(
+                footprintSize.X,
+                footprintSize.Z
+            )
+        )
+
+    --------------------------------------------------------
+    -- Search legal placement
+    --------------------------------------------------------
+
+    for _, rotation in ipairs({
+        0,
+        90,
+        180,
+        270
+    }) do
+
+        for x =
+            -halfX + margin,
+            halfX - margin,
+            step
+        do
+
+            for z =
+                -halfZ + margin,
+                halfZ - margin,
+                step
+            do
+
+                local worldPosition =
+                    main.CFrame:
+                        PointToWorldSpace(
+                            Vector3.new(
+                                x,
+                                0,
+                                z
+                            )
+                        )
+
+                local success,
+                      resolved =
+                    pcall(function()
+
+                        return
+                            PlacementMath.Resolve(
+                                plot,
+                                main,
+                                template,
+                                config,
+                                worldPosition,
+                                rotation,
+                                false
+                            )
+
+                    end)
+
+                if success
+                    and resolved
+                then
+
+                    local occupied = true
+
+                    pcall(function()
+
+                        occupied =
+                            PlacementMath.IsOccupied(
+                                plot,
+                                resolved
+                                    * pivotOffset,
+                                footprintSize,
+                                config
+                            )
+
+                    end)
+
+                    if not occupied then
+
+                        return
+                            resolved.Position,
+                            rotation
+                    end
+
+                end
+
+            end
+
+        end
+
+    end
+
+    return nil
+end
+
+------------------------------------------------------------
+
+local function placeOne(itemId)
+
+    local config =
+        BuildConfig.Get(itemId)
+
+    if not config then
+        return false
+    end
+
+    local category =
+        BuildConfig.CategoryOf(
+            itemId
+        )
+
+    local limit =
+        UpgradeEffects.PlacedLimitFor(
+            LP,
+            category
+        )
+
+    if placedCount(category)
+        >= limit
+    then
+
+        return false
+    end
+
+    local position,
+          rotation =
+        findFreePosition(
+            itemId
+        )
+
+    if not position then
+        return false
+    end
+
+    local success,
+          result =
+        pcall(function()
+
+            return
+                PlaceBuild:InvokeServer(
+                    itemId,
+                    position,
+                    rotation
+                )
+
+        end)
+
+    return
+        success
+        and result == true
+end
+
+------------------------------------------------------------
+
+local function autoPlaceInventory()
+
+    if battleActive() then
+        return
+    end
+
+    local inventory =
+        inventoryCounts()
+
+    local ids = {}
+
+    for id in pairs(
+        inventory
+    ) do
+
+        table.insert(ids, id)
+    end
+
+    table.sort(ids)
+
+    for _, itemId in ipairs(ids) do
+
+        if not State.AutoPlace then
+            return
+        end
+
+        while inventoryCount(itemId)
+            > 0
+        do
+
+            if not State.AutoPlace then
+                return
+            end
+
+            local placed =
+                placeOne(itemId)
+
+            if not placed then
+                break
+            end
+
+            task.wait(0.35)
+        end
+
+    end
+end
+
+--============================================================
+-- SHOP LISTS
+--============================================================
+
+local BUILDING_IDS = {}
+local DEFENSE_IDS = {}
+local TANK_IDS = {}
+
+------------------------------------------------------------
+-- Build actual dropdown lists from BuildConfig
+------------------------------------------------------------
+
+if type(BuildConfig.Items)
+    == "table"
+then
+
+    for itemId, config in pairs(
+        BuildConfig.Items
+    ) do
+
+        if type(itemId) == "string"
+            and type(config) == "table"
+        then
+
+            local category
+
+            pcall(function()
+
+                category =
+                    BuildConfig.CategoryOf(
+                        itemId
+                    )
+
+            end)
+
+            ------------------------------------------------
+            -- TANK
+            ------------------------------------------------
+
+            if category == "Tank" then
+
+                table.insert(
+                    TANK_IDS,
+                    itemId
+                )
+
+            ------------------------------------------------
+            -- BUILD / DEFENSE
+            ------------------------------------------------
+
+            elseif category == "Build" then
+
+                local subCategory
+
+                pcall(function()
+
+                    subCategory =
+                        BuildConfig.SubCategoryOf(
+                            itemId
+                        )
+
+                end)
+
+                if subCategory
+                    == "Defense"
+                then
+
+                    table.insert(
+                        DEFENSE_IDS,
+                        itemId
+                    )
+
+                else
+
+                    table.insert(
+                        BUILDING_IDS,
+                        itemId
+                    )
+                end
+
+            end
+
+        end
+
+    end
+
+end
+
+table.sort(BUILDING_IDS)
+table.sort(DEFENSE_IDS)
+table.sort(TANK_IDS)
+
+------------------------------------------------------------
+-- DEBUG LIST COUNTS
+------------------------------------------------------------
+
+print(
+    "[SHOP]",
+    "Buildings:",
+    #BUILDING_IDS,
+    "Defense:",
+    #DEFENSE_IDS,
+    "Tanks:",
+    #TANK_IDS
+)
+
+--============================================================
+-- SHOP HELPERS
+--============================================================
+
+local function selectionContains(
+    selection,
+    itemId
+)
+
+    for _, value in pairs(
+        selection or {}
+    ) do
+
+        if value == itemId then
+            return true
+        end
+    end
+
+    return false
+end
+
+------------------------------------------------------------
+
+local function selectedShopItems()
+
+    local selected = {}
+
+    --------------------------------------------------------
+    -- BUILDINGS
+    --------------------------------------------------------
+
+    for _, itemId in ipairs(
+        State.SelectedBuildings
+    ) do
+
+        selected[itemId] = true
+    end
+
+    --------------------------------------------------------
+    -- DEFENSE
+    --------------------------------------------------------
+
+    for _, itemId in ipairs(
+        State.SelectedDefense
+    ) do
+
+        selected[itemId] = true
+    end
+
+    --------------------------------------------------------
+    -- TANKS
+    --------------------------------------------------------
+
+    for _, itemId in ipairs(
+        State.SelectedTanks
+    ) do
+
+        selected[itemId] = true
+    end
+
+    --------------------------------------------------------
+    -- Convert set -> array
+    --------------------------------------------------------
+
+    local result = {}
+
+    for itemId in pairs(
+        selected
+    ) do
+
+        table.insert(
+            result,
+            itemId
+        )
+    end
+
+    --------------------------------------------------------
+    -- Buy cheaper selected items first
+    --------------------------------------------------------
+
+    table.sort(
+        result,
+        function(a, b)
+
+            local priceA =
+                BuildConfig.PriceOf(a)
+                or 0
+
+            local priceB =
+                BuildConfig.PriceOf(b)
+                or 0
+
+            return priceA < priceB
+        end
+    )
+
+    return result
+end
+
+--============================================================
+-- STOCK CHECK
+--============================================================
+
+local function stockFromUI(itemId)
+
+    local playerGui =
+        LP:FindFirstChild(
+            "PlayerGui"
+        )
+
+    if not playerGui then
+        return nil
+    end
+
+    for _, object in ipairs(
+        playerGui:GetDescendants()
+    ) do
+
+        if object:IsA("Frame")
+            and object.Name == itemId
+        then
+
+            local main =
+                object:FindFirstChild(
+                    "Main"
+                )
+
+            local item =
+                main
+                and main:
+                    FindFirstChild(
+                        "Item"
+                    )
+
+            local stockLabel =
+                item
+                and item:
+                    FindFirstChild(
+                        "Stock"
+                    )
+
+            if stockLabel
+                and stockLabel:
+                    IsA("TextLabel")
+            then
+
+                local stock =
+                    string.match(
+                        stockLabel.Text,
+                        "%d+"
+                    )
+
+                if stock then
+                    return tonumber(stock)
+                end
+
+            end
+
+        end
+
+    end
+
+    return nil
+end
+
+------------------------------------------------------------
+
+local function getStock(itemId)
+
+    local value =
+        CurrentStock[itemId]
+
+    if type(value)
+        == "number"
+    then
+
+        return value
+    end
+
+    return stockFromUI(
+        itemId
+    )
+end
+
+--============================================================
+-- AUTO BUY SELECTED
+--============================================================
+
+local function autoBuySelected()
+
+    local selected =
+        selectedShopItems()
+
+    if #selected == 0 then
+        return
+    end
+
+    for _, itemId in ipairs(
+        selected
+    ) do
+
+        if not State.AutoBuy then
+            return
+        end
+
+        ----------------------------------------------------
+        -- Does item still exist?
+        ----------------------------------------------------
+
+        local config =
+            BuildConfig.Get(itemId)
+
+        if not config then
+            continue
+        end
+
+        ----------------------------------------------------
+        -- Rank
+        ----------------------------------------------------
+
+        local requiredRank
+
+        pcall(function()
+
+            requiredRank =
+                BuildConfig.RankRequired(
+                    itemId
+                )
+
+        end)
+
+        if requiredRank then
+
+            local rank =
+                LP:GetAttribute("Rank")
+                or 1
+
+            if rank < requiredRank then
+                continue
+            end
+
+        end
+
+        ----------------------------------------------------
+        -- STOCK
+        ----------------------------------------------------
+
+        local stock =
+            getStock(itemId)
+
+        if stock ~= nil
+            and stock <= 0
+        then
+
+            continue
+        end
+
+        ----------------------------------------------------
+        -- CASH
+        ----------------------------------------------------
+
+        local price =
+            BuildConfig.PriceOf(
+                itemId
+            )
+
+        local cash =
+            LP:GetAttribute("Cash")
+            or 0
+
+        if price
+            and cash < price
+        then
+
+            continue
+        end
+
+        ----------------------------------------------------
+        -- BUY EXACT SELECTED ITEM
+        ----------------------------------------------------
+
+        print(
+            "[AUTO BUY]",
+            itemId,
+            "Stock:",
+            stock,
+            "Price:",
+            price
+        )
+
+        BuyItem:FireServer(
+            itemId
+        )
+
+        ----------------------------------------------------
+        -- Local cache estimate until ShopStock updates
+        ----------------------------------------------------
+
+        if stock
+            and stock > 0
+        then
+
+            CurrentStock[itemId] =
+                stock - 1
+        end
+
+        task.wait(0.20)
+    end
+end
+
+--============================================================
+-- UPGRADE TREE
+--============================================================
+
+local TREE_OPTIONS = {}
+
+if type(
+    UpgradeTreeConfig.Nodes
+) == "table"
+then
+
+    local branchSet = {}
+
+    for nodeId in pairs(
+        UpgradeTreeConfig.Nodes
+    ) do
+
+        local branch =
+            string.match(
+                nodeId,
+                "^(.-)%d+$"
+            )
+
+        if branch then
+            branchSet[branch] =
+                true
+        end
+
+    end
+
+    for branch in pairs(
+        branchSet
+    ) do
+
+        table.insert(
+            TREE_OPTIONS,
+            branch
+        )
+    end
+
+end
+
+table.sort(TREE_OPTIONS)
+
+------------------------------------------------------------
+
+local function treeSelected(
+    branch
+)
+
+    return selectionContains(
+        State.SelectedTree,
+        branch
+    )
+end
+
+------------------------------------------------------------
+
+local function autoTree()
+
+    if type(
+        UpgradeTreeConfig.Nodes
+    ) ~= "table"
+    then
+
+        return
+    end
+
+    local nodes = {}
+
+    for nodeId, data in pairs(
+        UpgradeTreeConfig.Nodes
+    ) do
+
+        local branch =
+            string.match(
+                nodeId,
+                "^(.-)%d+$"
+            )
+
+        local tier =
+            tonumber(
+                string.match(
+                    nodeId,
+                    "(%d+)$"
+                )
+            ) or 0
+
+        if branch
+            and treeSelected(
+                branch
+            )
+        then
+
+            table.insert(
+                nodes,
+                {
+                    Id = nodeId,
+                    Tier = tier,
+                    Cost =
+                        data.Cost
+                        or 0
+                }
+            )
+
+        end
+
+    end
+
+    --------------------------------------------------------
+    -- Earlier tiers first
+    --------------------------------------------------------
+
+    table.sort(
+        nodes,
+        function(a, b)
+
+            if a.Tier ~= b.Tier then
+                return a.Tier < b.Tier
+            end
+
+            return a.Cost < b.Cost
+        end
+    )
+
+    for _, node in ipairs(nodes) do
+
+        if not State.AutoTree then
+            return
+        end
+
+        local cash =
+            LP:GetAttribute("Cash")
+            or 0
+
+        if cash >= node.Cost then
+
+            BuyTreeUpgrade:
+                FireServer(
+                    node.Id
+                )
+
+            task.wait(0.15)
+        end
+
+    end
+end
+
+--============================================================
+-- ATTACK
+--============================================================
+
+local function playerForPlot(plot)
+
+    local userId =
+        plot:GetAttribute(
+            "OwnerUserId"
+        )
+
+    if typeof(userId)
+        ~= "number"
+    then
+
+        return nil
+    end
+
+    return Players:
+        GetPlayerByUserId(
+            userId
+        )
+end
+
+------------------------------------------------------------
+
+local function plotForPlayer(player)
+
+    if not player then
+        return nil
+    end
+
+    local plots =
+        Workspace:
+            FindFirstChild(
+                "Plots"
+            )
+
+    if not plots then
+        return nil
+    end
+
+    for _, plot in ipairs(
+        plots:GetChildren()
+    ) do
+
+        if plot:GetAttribute(
+            "OwnerUserId"
+        ) == player.UserId
+        then
+
+            return plot
+        end
+
+    end
+
+    return nil
+end
+
+------------------------------------------------------------
+
+local function targetLocked(plot)
+
+    local player =
+        playerForPlot(plot)
+
+    if not player then
+        return true
+    end
+
+    if player:GetAttribute(
+        "BaseLocked"
+    ) == true
+    then
+
+        return true
+    end
+
+    local expiry =
+        player:GetAttribute(
+            "LockExpiry"
+        )
+
+    return
+        typeof(expiry) == "number"
+        and expiry >
+            Workspace:GetServerTimeNow()
+end
+
+------------------------------------------------------------
+
+local function validTarget(plot)
+
+    if not plot
+        or not plot:IsA("Model")
+    then
+
+        return false
+    end
+
+    if plot == getMyPlot() then
+        return false
+    end
+
+    local player =
+        playerForPlot(plot)
+
+    if not player
+        or player == LP
+    then
+
+        return false
+    end
+
+    if targetLocked(plot) then
+        return false
+    end
+
+    if plot:GetAttribute(
+        "BattleEndsAt"
+    ) ~= nil
+    then
+
+        return false
+    end
+
+    return true
+end
+
+------------------------------------------------------------
+
+local function plotPosition(plot)
+
+    local main =
+        plot:FindFirstChild(
+            "MainPlotPart"
+        )
+
+    if main
+        and main:IsA("BasePart")
+    then
+
+        return main.Position
+    end
+
+    return plot:
+        GetPivot().Position
+end
+
+------------------------------------------------------------
+
+local function availableTargets()
+
+    local result = {}
+
+    local plots =
+        Workspace:
+            FindFirstChild(
+                "Plots"
+            )
+
+    if not plots then
+        return result
+    end
+
+    for _, plot in ipairs(
+        plots:GetChildren()
+    ) do
+
+        if validTarget(plot) then
+
+            table.insert(
+                result,
+                plot
+            )
+        end
+
+    end
+
+    return result
+end
+
+------------------------------------------------------------
+
+local AttackIndex = 1
+
+local function chooseTarget()
+
+    --------------------------------------------------------
+    -- SELECTED PLAYER
+    --------------------------------------------------------
+
+    if State.AttackMode
+        == "Selected Player"
+    then
+
+        if not State.SelectedPlayer then
+            return nil
+        end
+
+        local player =
+            Players:FindFirstChild(
+                State.SelectedPlayer
+            )
+
+        local plot =
+            plotForPlayer(player)
+
+        if plot
+            and validTarget(plot)
+        then
+
+            return plot
+        end
+
+        return nil
+    end
+
+    local targets =
+        availableTargets()
+
+    if #targets == 0 then
+        return nil
+    end
+
+    --------------------------------------------------------
+    -- CLOSEST
+    --------------------------------------------------------
+
+    if State.AttackMode
+        == "Closest Unlocked"
+    then
+
+        local own =
+            getMyPlot()
+
+        if not own then
+            return targets[1]
+        end
+
+        local origin =
+            plotPosition(own)
+
+        table.sort(
+            targets,
+            function(a, b)
+
+                local distanceA =
+                    (
+                        plotPosition(a)
+                        - origin
+                    ).Magnitude
+
+                local distanceB =
+                    (
+                        plotPosition(b)
+                        - origin
+                    ).Magnitude
+
+                return
+                    distanceA
+                    < distanceB
+            end
+        )
+
+        return targets[1]
+    end
+
+    --------------------------------------------------------
+    -- ANY UNLOCKED
+    --------------------------------------------------------
+
+    if AttackIndex >
+        #targets
+    then
+
+        AttackIndex = 1
+    end
+
+    local target =
+        targets[AttackIndex]
+
+    AttackIndex += 1
+
+    return target
+end
+
+------------------------------------------------------------
+
+local LastAttack =
+    0
+
+local function autoAttack()
+
+    if battleActive() then
+        return
+    end
+
+    if os.clock()
+        - LastAttack
+        < 2.2
+    then
+
+        return
+    end
+
+    local target =
+        chooseTarget()
+
+    if not target then
+        return
+    end
+
+    --------------------------------------------------------
+    -- Lock state could change after list creation.
+    --------------------------------------------------------
+
+    if targetLocked(
+        target
+    ) then
+
+        return
+    end
+
+    local player =
+        playerForPlot(
+            target
+        )
+
+    print(
+        "[AUTO ATTACK]",
+        player
+            and player.Name
+            or "?",
+        target.Name
+    )
+
+    LastAttack =
+        os.clock()
+
+    StartAttack:
+        FireServer(
+            target
+        )
+end
+
+--============================================================
+-- MAIN LOOPS
+--============================================================
+
+task.spawn(function()
+
+    while task.wait(0.8) do
+
+        if State.AutoCollect then
+
+            local ok, err =
+                pcall(
+                    collectIncome
+                )
+
+            if not ok then
+
+                CollectBusy =
+                    false
+
+                warn(
+                    "[AUTO COLLECT]",
+                    err
+                )
+            end
+
+        end
+
+    end
+end)
+
+------------------------------------------------------------
+
+task.spawn(function()
+
+    while task.wait(0.5) do
+
+        if State.AutoLock then
+            pcall(autoLock)
+        end
+
+    end
+end)
+
+------------------------------------------------------------
+
+task.spawn(function()
+
+    while task.wait(0.55) do
+
+        if State.AutoUpgrade then
+
+            pcall(
+                autoUpgradeBuildings
+            )
+        end
+
+    end
+end)
+
+------------------------------------------------------------
+
+task.spawn(function()
+
+    while task.wait(0.7) do
+
+        if State.AutoBuy then
+
+            pcall(
+                autoBuySelected
+            )
+        end
+
+    end
+end)
+
+------------------------------------------------------------
+
+task.spawn(function()
+
+    while task.wait(0.75) do
+
+        if State.AutoPlace then
+
+            pcall(
+                autoPlaceInventory
+            )
+        end
+
+    end
+end)
+
+------------------------------------------------------------
+
+task.spawn(function()
+
+    while task.wait(0.8) do
+
+        if State.AutoTree then
+            pcall(autoTree)
+        end
+
+    end
+end)
+
+------------------------------------------------------------
+
+task.spawn(function()
+
+    while task.wait(1) do
+
+        if State.AutoAttack then
+            pcall(autoAttack)
+        end
+
+    end
+end)
+
+--============================================================
+-- RAYFIELD GEN2
+--============================================================
+
+local Rayfield =
+    loadstring(
+        game:HttpGet(
+            "https://sirius.menu/gen2"
+        )
+    )()
+
+local Window =
+    Rayfield:CreateWindow({
+
+        name =
+            "Tycoon Tester",
+
+        subtitle =
+            "Automation",
+
+        sidebarLayout =
+            true,
+    })
+
+--============================================================
+-- BASE TAB
+--============================================================
+
+local BaseTab =
+    Window:CreateTab({
+        name = "Base"
+    })
+
+BaseTab:CreateSection({
+    name = "Automation"
+})
+
+BaseTab:CreateToggle({
+
+    name =
+        "Auto Collect",
+
+    flag =
+        "AutoCollect",
+
+    callback =
+        function(value)
+
+            State.AutoCollect =
+                value
+
+        end
+})
+
+------------------------------------------------------------
+
+BaseTab:CreateToggle({
+
+    name =
+        "Auto Lock",
+
+    flag =
+        "AutoLock",
+
+    callback =
+        function(value)
+
+            State.AutoLock =
+                value
+
+        end
+})
+
+------------------------------------------------------------
+
+BaseTab:CreateToggle({
+
+    name =
+        "Auto Upgrade Buildings",
+
+    flag =
+        "AutoUpgrade",
+
+    callback =
+        function(value)
+
+            State.AutoUpgrade =
+                value
+
+        end
+})
+
+------------------------------------------------------------
+
+BaseTab:CreateToggle({
+
+    name =
+        "Auto Place Inventory",
+
+    flag =
+        "AutoPlace",
+
+    callback =
+        function(value)
+
+            State.AutoPlace =
+                value
+
+        end
+})
+
+--============================================================
+-- SHOP TAB
+--============================================================
+
+local ShopTab =
+    Window:CreateTab({
+        name = "Shop"
+    })
+
+ShopTab:CreateSection({
+    name =
+        "Select Items"
+})
+
+------------------------------------------------------------
+-- BUILDINGS
+------------------------------------------------------------
+
+ShopTab:CreateDropdown({
+
+    name =
+        "Buildings",
+
+    options =
+        BUILDING_IDS,
+
+    multiSelect =
+        true,
+
+    value = {},
+
+    placeholder =
+        "Select buildings",
+
+    callback =
+        function(values)
+
+            State.SelectedBuildings =
+                values or {}
+
+        end
+})
+
+------------------------------------------------------------
+-- DEFENSE
+------------------------------------------------------------
+
+ShopTab:CreateDropdown({
+
+    name =
+        "Defense",
+
+    options =
+        DEFENSE_IDS,
+
+    multiSelect =
+        true,
+
+    value = {},
+
+    placeholder =
+        "Select defense",
+
+    callback =
+        function(values)
+
+            State.SelectedDefense =
+                values or {}
+
+        end
+})
+
+------------------------------------------------------------
+-- TANKS
+------------------------------------------------------------
+
+ShopTab:CreateDropdown({
+
+    name =
+        "Tanks",
+
+    options =
+        TANK_IDS,
+
+    multiSelect =
+        true,
+
+    value = {},
+
+    placeholder =
+        "Select tanks",
+
+    callback =
+        function(values)
+
+            State.SelectedTanks =
+                values or {}
+
+        end
+})
+
+------------------------------------------------------------
+
+ShopTab:CreateSection({
+    name =
+        "Automation"
+})
+
+ShopTab:CreateToggle({
+
+    name =
+        "Auto Buy Selected Items",
+
+    flag =
+        "AutoBuySelected",
+
+    callback =
+        function(value)
+
+            State.AutoBuy =
+                value
+
+        end
+})
+
+------------------------------------------------------------
+
+ShopTab:CreateToggle({
+
+    name =
+        "Auto Place Bought Items",
+
+    flag =
+        "AutoPlaceBought",
+
+    callback =
+        function(value)
+
+            State.AutoPlace =
+                value
+
+        end
+})
+
+--============================================================
+-- UPGRADE TAB
+--============================================================
+
+local UpgradeTab =
+    Window:CreateTab({
+        name = "Upgrades"
+    })
+
+UpgradeTab:CreateDropdown({
+
+    name =
+        "Upgrade Branches",
+
+    options =
+        TREE_OPTIONS,
+
+    multiSelect =
+        true,
+
+    value = {},
+
+    placeholder =
+        "Select branches",
+
+    callback =
+        function(values)
+
+            State.SelectedTree =
+                values or {}
+
+        end
+})
+
+------------------------------------------------------------
+
+UpgradeTab:CreateToggle({
+
+    name =
+        "Auto Buy Tree Upgrades",
+
+    flag =
+        "AutoTree",
+
+    callback =
+        function(value)
+
+            State.AutoTree =
+                value
+
+        end
+})
+
+--============================================================
+-- ATTACK TAB
+--============================================================
+
+local AttackTab =
+    Window:CreateTab({
+        name = "Attack"
+    })
+
+AttackTab:CreateSection({
+    name =
+        "Targeting"
+})
+
+------------------------------------------------------------
+
+AttackTab:CreateDropdown({
+
+    name =
+        "Attack Mode",
+
+    options = {
+
+        "Any Unlocked",
+        "Closest Unlocked",
+        "Selected Player",
+    },
+
+    value =
+        "Any Unlocked",
+
+    callback =
+        function(value)
+
+            State.AttackMode =
+                value
+
+        end
+})
+
+------------------------------------------------------------
+-- PLAYER LIST
+------------------------------------------------------------
+
+local PLAYER_OPTIONS = {}
+
+for _, player in ipairs(
+    Players:GetPlayers()
+) do
+
+    if player ~= LP then
+
+        local plot =
+            plotForPlayer(
+                player
+            )
+
+        if plot then
+
+            table.insert(
+                PLAYER_OPTIONS,
+                player.Name
+            )
+        end
+
+    end
+
+end
+
+table.sort(
+    PLAYER_OPTIONS
+)
+
+------------------------------------------------------------
+
+AttackTab:CreateDropdown({
+
+    name =
+        "Target Player",
+
+    options =
+        PLAYER_OPTIONS,
+
+    value =
+        PLAYER_OPTIONS[1],
+
+    placeholder =
+        "Choose player",
+
+    callback =
+        function(value)
+
+            State.SelectedPlayer =
+                value
+
+        end
+})
+
+------------------------------------------------------------
+
+AttackTab:CreateToggle({
+
+    name =
+        "Auto Attack",
+
+    flag =
+        "AutoAttack",
+
+    callback =
+        function(value)
+
+            State.AutoAttack =
+                value
+
+        end
+})
+
+------------------------------------------------------------
+
+print(
+    "[TYCOON TESTER]",
+    "Loaded successfully"
+)
+
+print(
+    "[SHOP LISTS]",
+    "Buildings:",
+    #BUILDING_IDS,
+    "Defense:",
+    #DEFENSE_IDS,
+    "Tanks:",
+    #TANK_IDS
+)
