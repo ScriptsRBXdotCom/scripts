@@ -1,0 +1,652 @@
+-- Simple Roblox ScriptsRBX hub
+-- Controls only:
+-- 1) Teleport to Plot
+-- 2) Teleport to Highest Rarity Egg
+-- 3) Auto Upgrade
+-- 4) Auto Hatch
+-- 5) Auto Place Eggs
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+local env = getgenv and getgenv() or _G
+
+-- Stop older copies / loops when re-executed.
+for _, key in ipairs({"__GAME_ScriptsRBX_SIMPLE_WINDOW", "__GAME_ScriptsRBX_HUB_WINDOW"}) do
+    local old = env[key]
+    if old then
+        pcall(function()
+            old:Unload()
+        end)
+        env[key] = nil
+    end
+end
+
+env.__GAME_ScriptsRBX_SIMPLE_GEN = (env.__GAME_ScriptsRBX_SIMPLE_GEN or 0) + 1
+local GEN = env.__GAME_ScriptsRBX_SIMPLE_GEN
+
+local State = {
+    AutoUpgrade = false,
+    AutoHatch = false,
+    AutoPlace = false,
+}
+
+local function alive()
+    return env.__GAME_ScriptsRBX_SIMPLE_GEN == GEN
+end
+
+local function getCharacter()
+    local character = LocalPlayer.Character
+    if character and character.Parent then
+        return character
+    end
+    return nil
+end
+
+local function getRoot()
+    local character = getCharacter()
+    return character and character:FindFirstChild("HumanoidRootPart") or nil
+end
+
+local function teleportTo(cframe)
+    local character = getCharacter()
+    local root = getRoot()
+    if not character or not root then
+        warn("[ScriptsRBX Hub] Character is not ready.")
+        return false
+    end
+
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+    character:PivotTo(cframe)
+    return true
+end
+
+-- CONFIG / REMOTES ------------------------------------------------
+
+local Shared = ReplicatedStorage:WaitForChild("Shared")
+local Config = Shared:WaitForChild("Config")
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+
+local EggCatalog
+local RarityConfig
+local BaseConfig
+local EggConfig
+local PlacementConfig
+local Models
+
+pcall(function()
+    EggCatalog = require(Config:WaitForChild("EggCatalog"))
+end)
+
+pcall(function()
+    RarityConfig = require(Config:WaitForChild("RarityConfig"))
+end)
+
+pcall(function()
+    BaseConfig = require(Config:WaitForChild("BaseConfig"))
+end)
+
+pcall(function()
+    EggConfig = require(Config:WaitForChild("EggConfig"))
+end)
+
+pcall(function()
+    PlacementConfig = require(Config:WaitForChild("PlacementConfig"))
+end)
+
+pcall(function()
+    Models = require(Shared:WaitForChild("Util"):WaitForChild("Models"))
+end)
+
+local UpgradeBase = Remotes:FindFirstChild("UpgradeBase")
+local HatchEgg = Remotes:FindFirstChild("HatchEgg")
+local PlaceItem = Remotes:FindFirstChild("PlaceItem")
+
+-- PLOT ------------------------------------------------------------
+
+local function getOwnPlot()
+    local world = Workspace:FindFirstChild("World")
+    local bases = world and world:FindFirstChild("Bases")
+    if not bases then
+        return nil
+    end
+
+    local baseId = LocalPlayer:GetAttribute("BaseId")
+    if baseId ~= nil then
+        local byId = bases:FindFirstChild(tostring(baseId))
+        if byId then
+            return byId
+        end
+    end
+
+    for _, plot in ipairs(bases:GetChildren()) do
+        if plot:GetAttribute("OwnerUserId") == LocalPlayer.UserId then
+            return plot
+        end
+    end
+
+    return nil
+end
+
+local function findPlotTeleportPart(plot)
+    if not plot then
+        return nil
+    end
+
+    local spawnPoint = plot:FindFirstChild("SpawnPoint", true)
+    if spawnPoint and spawnPoint:IsA("BasePart") then
+        return spawnPoint
+    end
+
+    local centerPoint = plot:FindFirstChild("CenterPoint", true)
+    if centerPoint and centerPoint:IsA("BasePart") then
+        return centerPoint
+    end
+
+    if plot:IsA("Model") and plot.PrimaryPart then
+        return plot.PrimaryPart
+    end
+
+    return plot:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function getPetArea()
+    local plot = getOwnPlot()
+    if not plot then
+        return nil
+    end
+
+    local petArea = plot:FindFirstChild("PetArea", true)
+    if petArea and petArea:IsA("BasePart") then
+        return petArea
+    end
+
+    return nil
+end
+
+local function teleportToPlot()
+    local plot = getOwnPlot()
+    local part = findPlotTeleportPart(plot)
+
+    if not part then
+        warn("[ScriptsRBX Hub] Could not find your plot SpawnPoint.")
+        return
+    end
+
+    if teleportTo(part.CFrame * CFrame.new(0, 3.5, 0)) then
+        print("[ScriptsRBX Hub] Teleported to plot.")
+    end
+end
+
+-- HIGHEST RARITY EGG ---------------------------------------------
+
+local fallbackOrder = {
+    "Common",
+    "Uncommon",
+    "Rare",
+    "Epic",
+    "Legendary",
+    "Mythic",
+    "Cosmic",
+    "Secret",
+    "Eternal",
+    "Divine",
+    "Titan",
+}
+
+local rarityRank = {}
+local order = (RarityConfig and type(RarityConfig.Order) == "table") and RarityConfig.Order or fallbackOrder
+for index, rarity in ipairs(order) do
+    rarityRank[rarity] = index
+end
+
+local function getEggId(model)
+    local id = model:GetAttribute("Id")
+    if typeof(id) == "string" and id ~= "" then
+        return id
+    end
+    return model.Name
+end
+
+local function getEggRarity(model)
+    local direct = model:GetAttribute("Rarity")
+    if typeof(direct) == "string" and direct ~= "" then
+        return direct
+    end
+
+    local id = getEggId(model)
+    if EggCatalog and EggCatalog.Eggs then
+        local entry = EggCatalog.Eggs[id]
+        if entry and typeof(entry.Rarity) == "string" then
+            return entry.Rarity
+        end
+    end
+
+    return "Unknown"
+end
+
+local function getEggPart(model)
+    if not model or not model:IsA("Model") then
+        return nil
+    end
+
+    local prompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt and prompt.Parent and prompt.Parent:IsA("BasePart") then
+        return prompt.Parent
+    end
+
+    if model.PrimaryPart then
+        return model.PrimaryPart
+    end
+
+    return model:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function eggAvailable(model)
+    return model
+        and model:IsA("Model")
+        and model.Parent ~= nil
+        and model:GetAttribute("CarriedBy") == nil
+        and model:GetAttribute("HiddenByStarter") ~= true
+        and getEggPart(model) ~= nil
+end
+
+local function collectEggsFrom(container, output)
+    if not container then
+        return
+    end
+
+    for _, child in ipairs(container:GetChildren()) do
+        if eggAvailable(child) then
+            table.insert(output, child)
+        end
+    end
+end
+
+local function getHighestRarityEgg()
+    local eggs = {}
+
+    collectEggsFrom(Workspace:FindFirstChild("LocalStarterEgg"), eggs)
+
+    local world = Workspace:FindFirstChild("World")
+    local worldEggs = world and world:FindFirstChild("Eggs")
+    collectEggsFrom(worldEggs, eggs)
+
+    local root = getRoot()
+    local bestModel = nil
+    local bestRank = -1
+    local bestDistance = math.huge
+
+    for _, model in ipairs(eggs) do
+        local rarity = getEggRarity(model)
+        local rank = rarityRank[rarity] or 0
+        local part = getEggPart(model)
+        local distance = (root and part) and (part.Position - root.Position).Magnitude or math.huge
+
+        if rank > bestRank or (rank == bestRank and distance < bestDistance) then
+            bestModel = model
+            bestRank = rank
+            bestDistance = distance
+        end
+    end
+
+    return bestModel
+end
+
+local function teleportToHighestRarityEgg()
+    local egg = getHighestRarityEgg()
+    if not egg then
+        warn("[ScriptsRBX Hub] No available egg found.")
+        return
+    end
+
+    local part = getEggPart(egg)
+    if not part then
+        warn("[ScriptsRBX Hub] Highest rarity egg has no usable part.")
+        return
+    end
+
+    local rarity = getEggRarity(egg)
+    local id = getEggId(egg)
+
+    if teleportTo(part.CFrame * CFrame.new(0, 2.75, 4.25)) then
+        print(string.format("[ScriptsRBX Hub] Teleported to: %s | %s", id, rarity))
+    end
+end
+
+-- AUTO UPGRADE ----------------------------------------------------
+
+local function canAffordBaseUpgrade()
+    local level = LocalPlayer:GetAttribute("BaseUpgradeLevel")
+    local cash = LocalPlayer:GetAttribute("Cash")
+
+    if typeof(level) ~= "number" then
+        return true
+    end
+
+    if BaseConfig and typeof(BaseConfig.MaxTier) == "number" and level >= BaseConfig.MaxTier then
+        return false
+    end
+
+    if BaseConfig and BaseConfig.Tiers then
+        local nextTier = BaseConfig.Tiers[level + 1]
+        if nextTier and typeof(nextTier.Cost) == "number" and typeof(cash) == "number" then
+            return cash >= nextTier.Cost
+        end
+    end
+
+    return true
+end
+
+local function startAutoUpgrade()
+    task.spawn(function()
+        while alive() and State.AutoUpgrade do
+            if UpgradeBase and UpgradeBase:IsA("RemoteEvent") and canAffordBaseUpgrade() then
+                UpgradeBase:FireServer()
+            end
+            task.wait(0.55)
+        end
+    end)
+end
+
+-- AUTO HATCH ------------------------------------------------------
+
+local function hatchReadyEggs()
+    if not HatchEgg or not HatchEgg:IsA("RemoteEvent") then
+        return
+    end
+
+    local world = Workspace:FindFirstChild("World")
+    local placed = world and world:FindFirstChild("PlacedEggs")
+    if not placed then
+        return
+    end
+
+    for _, egg in ipairs(placed:GetChildren()) do
+        if not alive() or not State.AutoHatch then
+            return
+        end
+
+        if egg:IsA("Model")
+            and egg:GetAttribute("OwnerUserId") == LocalPlayer.UserId
+            and egg:GetAttribute("Ready") == true then
+            HatchEgg:FireServer(egg.Name)
+            task.wait(0.12)
+        end
+    end
+end
+
+local function startAutoHatch()
+    task.spawn(function()
+        while alive() and State.AutoHatch do
+            hatchReadyEggs()
+            task.wait(0.35)
+        end
+    end)
+end
+
+-- AUTO PLACE EGGS -------------------------------------------------
+
+local function getEggTools()
+    local result = {}
+
+    local function scan(container)
+        if not container then
+            return
+        end
+
+        for _, child in ipairs(container:GetChildren()) do
+            if child:IsA("Tool")
+                and child:GetAttribute("ItemType") == "Egg"
+                and typeof(child:GetAttribute("Uid")) == "string" then
+                table.insert(result, child)
+            end
+        end
+    end
+
+    scan(LocalPlayer:FindFirstChildOfClass("Backpack"))
+    scan(getCharacter())
+
+    return result
+end
+
+local function getPlacementMetrics(tool)
+    local id = tool:GetAttribute("Id")
+    local weight = tool:GetAttribute("Weight")
+
+    local footprint = 3
+    local seatOffset = 1.5
+
+    if not (EggCatalog and EggConfig and Models and BaseConfig) then
+        return footprint, seatOffset
+    end
+
+    if typeof(id) ~= "string" then
+        return footprint, seatOffset
+    end
+
+    local assets = ReplicatedStorage:FindFirstChild("Assets")
+    assets = assets and assets:FindFirstChild(EggConfig.Tool.ModelsFolder)
+    if not assets then
+        return footprint, seatOffset
+    end
+
+    local modelName = id
+    if typeof(EggCatalog.ModelNameFor) == "function" then
+        local ok, resolved = pcall(EggCatalog.ModelNameFor, id)
+        if ok and typeof(resolved) == "string" then
+            modelName = resolved
+        end
+    end
+
+    local source = assets:FindFirstChild(modelName)
+    if not source or not source:IsA("Model") then
+        return footprint, seatOffset
+    end
+
+    local clone = source:Clone()
+
+    local scale = 1
+    if typeof(EggCatalog.RenderScaleFor) == "function" then
+        local ok, resolvedScale = pcall(EggCatalog.RenderScaleFor, id, typeof(weight) == "number" and weight or 0)
+        if ok and typeof(resolvedScale) == "number" and resolvedScale > 0 then
+            scale = resolvedScale
+        end
+    end
+
+    pcall(function()
+        Models.ScaleBy(clone, scale)
+    end)
+
+    pcall(function()
+        footprint = BaseConfig.FootprintOf(clone)
+    end)
+
+    local sink = PlacementConfig and PlacementConfig.Ground and PlacementConfig.Ground.SinkFraction or 0.07
+    pcall(function()
+        seatOffset = Models.SeatOffset(clone, sink)
+    end)
+
+    clone:Destroy()
+
+    return math.max(footprint, 3), math.max(seatOffset, 0)
+end
+
+local function groundPositionAt(petArea, localX, localZ, seatOffset)
+    local localPoint = Vector3.new(localX, 0, localZ)
+    local worldPoint = petArea.CFrame:PointToWorldSpace(localPoint)
+    local up = petArea.CFrame.UpVector
+
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+
+    local exclude = { petArea }
+    local character = getCharacter()
+    if character then
+        table.insert(exclude, character)
+    end
+    params.FilterDescendantsInstances = exclude
+    params.RespectCanCollide = true
+
+    local origin = worldPoint + up * 25
+    local result = Workspace:Raycast(origin, -up * 100, params)
+
+    if result then
+        return result.Position + up * seatOffset
+    end
+
+    -- Fallback to the bottom face of the placement volume.
+    return petArea.CFrame:PointToWorldSpace(
+        Vector3.new(localX, -petArea.Size.Y * 0.5, localZ)
+    ) + up * seatOffset
+end
+
+local function findFreePlacement(tool)
+    local petArea = getPetArea()
+    if not petArea then
+        return nil
+    end
+
+    local footprint, seatOffset = getPlacementMetrics(tool)
+    local edgeInset = 2
+    if BaseConfig and BaseConfig.Placement and typeof(BaseConfig.Placement.EdgeInset) == "number" then
+        edgeInset = BaseConfig.Placement.EdgeInset
+    end
+
+    local halfX = math.max(petArea.Size.X * 0.5 - edgeInset - footprint * 0.5, 0)
+    local halfZ = math.max(petArea.Size.Z * 0.5 - edgeInset - footprint * 0.5, 0)
+    local step = math.max(footprint + 0.6, 3.4)
+
+    -- Start near the centre, then fan out over the plot.
+    local candidates = { Vector2.new(0, 0) }
+
+    local x = -halfX
+    while x <= halfX + 0.001 do
+        local z = -halfZ
+        while z <= halfZ + 0.001 do
+            if math.abs(x) > 0.1 or math.abs(z) > 0.1 then
+                table.insert(candidates, Vector2.new(x, z))
+            end
+            z = z + step
+        end
+        x = x + step
+    end
+
+    table.sort(candidates, function(a, b)
+        return a.Magnitude < b.Magnitude
+    end)
+
+    for _, point in ipairs(candidates) do
+        local position = groundPositionAt(petArea, point.X, point.Y, seatOffset)
+        local valid = true
+
+        if BaseConfig and typeof(BaseConfig.CanPlaceAt) == "function" then
+            local ok, allowed = pcall(BaseConfig.CanPlaceAt, LocalPlayer, position, footprint, true)
+            valid = ok and allowed == true
+        end
+
+        if valid then
+            return position
+        end
+    end
+
+    return nil
+end
+
+local lastPlaceAttempt = {}
+
+local function placeOneEgg()
+    if not PlaceItem or not PlaceItem:IsA("RemoteEvent") then
+        return false
+    end
+
+    for _, tool in ipairs(getEggTools()) do
+        local uid = tool:GetAttribute("Uid")
+        if typeof(uid) == "string" then
+            local last = lastPlaceAttempt[uid] or 0
+            if os.clock() - last >= 1 then
+                local position = findFreePlacement(tool)
+                if position then
+                    lastPlaceAttempt[uid] = os.clock()
+                    PlaceItem:FireServer(uid, position)
+                    return true
+                end
+            end
+        end
+    end
+
+    return false
+end
+
+local function startAutoPlace()
+    task.spawn(function()
+        while alive() and State.AutoPlace do
+            placeOneEgg()
+            task.wait(0.35)
+        end
+    end)
+end
+
+-- UI --------------------------------------------------------------
+
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
+
+local window = Rayfield:CreateWindow({
+    name = "ScriptsRBX Hub",
+    subtitle = "Simple testing",
+    sidebarLayout = false,
+    theme = "cobalt",
+    showName = "ScriptsRBX Hub",
+})
+
+env.__GAME_ScriptsRBX_SIMPLE_WINDOW = window
+
+local Main = window:CreateTab({ name = "Main" })
+
+Main:CreateButton({
+    name = "Teleport to Plot",
+    callback = teleportToPlot,
+})
+
+Main:CreateButton({
+    name = "Teleport to Highest Rarity Egg",
+    callback = teleportToHighestRarityEgg,
+})
+
+Main:CreateToggle({
+    name = "Auto Upgrade",
+    flag = "AutoUpgrade",
+    callback = function(value)
+        State.AutoUpgrade = value
+        if value then
+            startAutoUpgrade()
+        end
+    end,
+})
+
+Main:CreateToggle({
+    name = "Auto Hatch",
+    flag = "AutoHatch",
+    callback = function(value)
+        State.AutoHatch = value
+        if value then
+            startAutoHatch()
+        end
+    end,
+})
+
+Main:CreateToggle({
+    name = "Auto Place Eggs",
+    flag = "AutoPlaceEggs",
+    callback = function(value)
+        State.AutoPlace = value
+        if value then
+            startAutoPlace()
+        end
+    end,
+})
+
+print("[ScriptsRBX Hub] Loaded successfully.")
