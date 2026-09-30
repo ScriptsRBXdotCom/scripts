@@ -1473,4 +1473,4 @@ UserInputService.InputEnded:Connect(
 
 applyMovement()
 
-setStatus("Ready")e
+setStatus("Ready")
