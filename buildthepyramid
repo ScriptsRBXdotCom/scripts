@@ -1,0 +1,853 @@
+-- Auto farm + capacity-aware trips + auto upgrades + simple UI
+-- Intended for testing your own game/remotes.
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+--// KNIT REMOTES
+local Services = ReplicatedStorage
+    :WaitForChild("Packages")
+    :WaitForChild("_Index")
+    :WaitForChild("sleitnick_knit@1.7.0")
+    :WaitForChild("knit")
+    :WaitForChild("Services")
+
+local PickupRF = Services.BookService.RF.Pickup
+local PlaceRF = Services.PyramidService.RF.Place
+local PurchaseUpgradeRF = Services.DataService.RF.PurchaseUpgrade
+
+--// GAME MODULES
+local PyramidRuntime = require(ReplicatedStorage.Shared.Placement.PyramidRuntime)
+local PlacementRange = require(ReplicatedStorage.Shared.Placement.PlacementRange)
+local PyramidConfig = require(ReplicatedStorage.Shared.Config.PyramidConfig)
+local UpgradeEffects = require(ReplicatedStorage.Shared.Upgrades.UpgradeEffects)
+local UpgradeLevels = require(ReplicatedStorage.Shared.Upgrades.UpgradeLevels)
+local UpgradeCatalog = require(ReplicatedStorage.Shared.Config.UpgradeCatalog)
+local CarryState = require(ReplicatedStorage.Shared.Books.CarryState)
+
+local CONFIG = {
+    TeleportHeight = 5,
+    TeleportDelay = 0.18,
+    PickupDelay = 0.10,
+    PlaceDelay = 0.13,
+    CapacityPollDelay = 0.05,
+    CapacityChangeTimeout = 0.65,
+    BetweenTrips = 0.15,
+    UpgradeAttemptDelay = 0.45,
+    UpgradeCycleDelay = 1.00,
+}
+
+local State = {
+    AutoFarm = false,
+    AutoUpgrades = false,
+    UpgradePlacementRange = false,
+    UpgradeBulkPlace = false,
+    UpgradeBulkPickup = false,
+    Destroyed = false,
+}
+
+--////////////////////////////////////////////////////////////
+-- Capacity reader
+-- Reads: PlayerGui.ScreenGui.CenterLeft.LeftSideBar.StrengthCounter.Readout.Detail.TextLabel
+-- Example text: "Capacity: 3/29"
+--////////////////////////////////////////////////////////////
+
+local function getCapacityLabel()
+    local ok, label = pcall(function()
+        return playerGui
+            :WaitForChild("ScreenGui", 2)
+            :WaitForChild("CenterLeft", 2)
+            :WaitForChild("LeftSideBar", 2)
+            :WaitForChild("StrengthCounter", 2)
+            :WaitForChild("Readout", 2)
+            :WaitForChild("Detail", 2)
+            :WaitForChild("TextLabel", 2)
+    end)
+
+    if ok and label and label:IsA("TextLabel") then
+        return label
+    end
+
+    -- Fallback if the UI hierarchy gets renamed but the text still says Capacity: x/y.
+    for _, obj in ipairs(playerGui:GetDescendants()) do
+        if obj:IsA("TextLabel") and string.find(obj.Text or "", "Capacity:", 1, true) then
+            return obj
+        end
+    end
+
+    return nil
+end
+
+local capacityLabel = nil
+
+local function readCapacity()
+    if not capacityLabel or not capacityLabel.Parent then
+        capacityLabel = getCapacityLabel()
+    end
+
+    if not capacityLabel then
+        return nil, nil
+    end
+
+    local text = tostring(capacityLabel.Text or "")
+    local current, maximum = string.match(text, "Capacity:%s*([%d,]+)%s*/%s*([%d,]+)")
+
+    if not current then
+        -- More permissive fallback.
+        current, maximum = string.match(text, "([%d,]+)%s*/%s*([%d,]+)")
+    end
+
+    if not current or not maximum then
+        return nil, nil
+    end
+
+    current = tonumber((current:gsub(",", "")))
+    maximum = tonumber((maximum:gsub(",", "")))
+
+    return current, maximum
+end
+
+local function waitForCapacity(timeout)
+    local deadline = os.clock() + (timeout or 3)
+
+    repeat
+        local current, maximum = readCapacity()
+        if current ~= nil and maximum ~= nil then
+            return current, maximum
+        end
+        task.wait(CONFIG.CapacityPollDelay)
+    until os.clock() >= deadline or State.Destroyed
+
+    return nil, nil
+end
+
+local function waitForCapacityChange(previous, timeout)
+    local deadline = os.clock() + (timeout or CONFIG.CapacityChangeTimeout)
+
+    repeat
+        local current, maximum = readCapacity()
+        if current ~= nil and current ~= previous then
+            return current, maximum
+        end
+        task.wait(CONFIG.CapacityPollDelay)
+    until os.clock() >= deadline or State.Destroyed
+
+    return readCapacity()
+end
+
+local function decodeCount(receipt)
+    if type(receipt) ~= "string" then
+        return nil
+    end
+
+    local ok, decoded = pcall(CarryState.decode, receipt)
+    if ok and type(decoded) == "table" then
+        return decoded.count
+    end
+
+    return nil
+end
+
+--////////////////////////////////////////////////////////////
+-- Movement
+--////////////////////////////////////////////////////////////
+
+local function getCharacter()
+    return player.Character or player.CharacterAdded:Wait()
+end
+
+local function getHRP()
+    return getCharacter():WaitForChild("HumanoidRootPart")
+end
+
+local function teleportToPosition(position)
+    local hrp = getHRP()
+    hrp.CFrame = CFrame.new(position + Vector3.new(0, CONFIG.TeleportHeight, 0))
+    task.wait(CONFIG.TeleportDelay)
+end
+
+local function getQuarryPart()
+    local quarry = Workspace:WaitForChild("Quarry")
+    local quarryBlocks = quarry:WaitForChild("QuarryBlocks")
+
+    local exact = quarryBlocks:FindFirstChild("Part")
+    if exact and exact:IsA("BasePart") then
+        return exact
+    end
+
+    return quarryBlocks:FindFirstChildWhichIsA("BasePart", true)
+end
+
+local function teleportToQuarry()
+    local target = getQuarryPart()
+    if not target then
+        return false
+    end
+
+    teleportToPosition(target.Position)
+    return true
+end
+
+--////////////////////////////////////////////////////////////
+-- Pickup
+--////////////////////////////////////////////////////////////
+
+local quarryRegion = Workspace:WaitForChild("Regions"):WaitForChild("Region:Quarry")
+
+local function pickupOnce()
+    local success, ok, receipt = pcall(function()
+        return PickupRF:InvokeServer(quarryRegion)
+    end)
+
+    if not success then
+        return false, nil, tostring(ok)
+    end
+
+    return ok == true, decodeCount(receipt), receipt
+end
+
+local farmStatusText = "Idle"
+local upgradeStatusText = "Idle"
+
+local function pickupUntilFull()
+    local current, maximum = waitForCapacity(3)
+    if current == nil or maximum == nil then
+        farmStatusText = "Capacity UI not found"
+        return false
+    end
+
+    if current >= maximum then
+        return true
+    end
+
+    farmStatusText = string.format("Going to quarry (%d/%d)", current, maximum)
+
+    if not teleportToQuarry() then
+        farmStatusText = "Quarry part not found"
+        return false
+    end
+
+    local rejects = 0
+
+    while State.AutoFarm and not State.Destroyed do
+        current, maximum = readCapacity()
+
+        if current ~= nil and maximum ~= nil and current >= maximum then
+            farmStatusText = string.format("Full (%d/%d)", current, maximum)
+            return true
+        end
+
+        local before = current
+        local ok, receiptCount, reason = pickupOnce()
+
+        if ok then
+            rejects = 0
+
+            if receiptCount ~= nil and maximum ~= nil and receiptCount >= maximum then
+                farmStatusText = string.format("Full (%d/%d)", receiptCount, maximum)
+                return true
+            end
+
+            if before ~= nil then
+                waitForCapacityChange(before)
+            else
+                task.wait(CONFIG.PickupDelay)
+            end
+        else
+            rejects += 1
+            if rejects >= 3 then
+                farmStatusText = "Pickup rejected: " .. tostring(reason)
+                return false
+            end
+            task.wait(0.25)
+        end
+
+        task.wait(CONFIG.PickupDelay)
+    end
+
+    return false
+end
+
+--////////////////////////////////////////////////////////////
+-- Pyramid placement
+--////////////////////////////////////////////////////////////
+
+local slotCursorByLayer = {}
+local locallyUsed = {}
+
+local function slotKey(generation, layer, slotIndex)
+    return string.format("%s:%s:%s", tostring(generation), tostring(layer), tostring(slotIndex))
+end
+
+local function getCurrentPyramidContext()
+    local model = PyramidRuntime.getModel(Workspace)
+    if not model then
+        return nil
+    end
+
+    local geometry = PyramidRuntime.getGeometry(model)
+    local layer = PyramidRuntime.getCurrentLayer(Workspace)
+    local generation = model:GetAttribute("PlacementGeneration")
+
+    if not geometry or not layer or generation == nil then
+        return nil
+    end
+
+    return model, geometry, layer, generation
+end
+
+local function nextFreeSlot()
+    -- Do not enumerate geometry manually. Ask the game runtime for the nearest
+    -- valid free slot; this survives tier/geometry changes and fixes the
+    -- geometry.getLayerBlockCount nil error seen in the first build.
+    local model = PyramidRuntime.getModel(Workspace)
+    if not model then
+        return nil
+    end
+
+    local origin
+    local okPivot, pivot = pcall(function() return model:GetPivot() end)
+    if okPivot and pivot then
+        origin = pivot.Position
+    else
+        origin = getHRP().Position
+    end
+
+    local ok, slot = pcall(function()
+        return PyramidRuntime.resolveNearestSlot(origin, Workspace, nil, 9999)
+    end)
+
+    if not ok or not slot then
+        return nil
+    end
+
+    return {
+        model = model,
+        geometry = PyramidRuntime.getGeometry(model),
+        layer = slot.layer,
+        generation = slot.generation,
+        slotIndex = slot.slotIndex,
+        cframe = slot.cframe,
+    }
+end
+
+local function getBulkExtras(slot, carriedCount)
+    if carriedCount == nil or carriedCount <= 1 then
+        return {}
+    end
+
+    if not slot.geometry or type(slot.geometry.findBulkSlots) ~= "function" then
+        return {}
+    end
+
+    local totalUnits = UpgradeEffects.placeUnits(player)
+    if type(totalUnits) ~= "number" then
+        totalUnits = 1
+    end
+
+    local extraBudget = math.min(math.max(math.floor(totalUnits) - 1, 0), carriedCount - 1)
+    if extraBudget < 1 then
+        return {}
+    end
+
+    local probe = PyramidRuntime.freeSlotProbe(Workspace)
+    local range = PlacementRange.forPlayer(player, PyramidConfig.PlaceDistance)
+    local position = getHRP().Position
+
+    local extras = slot.geometry.findBulkSlots(
+        slot.layer,
+        slot.slotIndex,
+        extraBudget,
+        function(candidateSlot)
+            local key = slotKey(slot.generation, slot.layer, candidateSlot)
+            return not locallyUsed[key] and probe(slot.layer, candidateSlot)
+        end,
+        function(candidateSlot)
+            local cf = slot.geometry.getSlotCFrame(slot.layer, candidateSlot)
+            return cf ~= nil and (position - cf.Position).Magnitude <= range
+        end
+    )
+
+    return type(extras) == "table" and extras or {}
+end
+
+local function placeOnce()
+    local slot = nextFreeSlot()
+    if not slot or not slot.cframe then
+        return false, nil, 0, "NoFreeSlot"
+    end
+
+    farmStatusText = string.format("Going to pyramid L%d S%d", slot.layer, slot.slotIndex)
+    teleportToPosition(slot.cframe.Position)
+
+    -- Pyramid may have advanced while travelling.
+    local model, geometry, currentLayer, currentGeneration = getCurrentPyramidContext()
+    if not model then
+        return false, nil, 0, "NoPyramid"
+    end
+
+    if currentLayer ~= slot.layer or currentGeneration ~= slot.generation then
+        return false, nil, 0, "GenerationChanged"
+    end
+
+    slot.geometry = geometry
+
+    local currentCount = select(1, readCapacity())
+    local extras = getBulkExtras(slot, currentCount or 1)
+
+    local success, ok, receipt, selectedColumn = pcall(function()
+        return PlaceRF:InvokeServer(
+            slot.layer,
+            slot.slotIndex,
+            slot.generation,
+            extras
+        )
+    end)
+
+    if not success then
+        return false, nil, 0, tostring(ok)
+    end
+
+    if ok == true then
+        locallyUsed[slotKey(slot.generation, slot.layer, slot.slotIndex)] = true
+        for _, extraSlot in ipairs(extras) do
+            locallyUsed[slotKey(slot.generation, slot.layer, extraSlot)] = true
+        end
+
+        return true, decodeCount(receipt), 1 + #extras, selectedColumn
+    end
+
+    return false, decodeCount(receipt), 0, "Rejected"
+end
+
+local function placeUntilEmpty()
+    local failures = 0
+
+    while State.AutoFarm and not State.Destroyed do
+        local current, maximum = waitForCapacity(1)
+
+        if current ~= nil and current <= 0 then
+            farmStatusText = string.format("Empty (0/%d)", maximum or 0)
+            return true
+        end
+
+        local before = current
+        local ok, receiptCount, unitsPlaced, reason = placeOnce()
+
+        if ok then
+            failures = 0
+
+            if receiptCount ~= nil and receiptCount <= 0 then
+                farmStatusText = "Inventory emptied"
+                return true
+            end
+
+            if before ~= nil then
+                waitForCapacityChange(before)
+            else
+                task.wait(CONFIG.PlaceDelay)
+            end
+
+            farmStatusText = string.format("Placed %d block%s", unitsPlaced, unitsPlaced == 1 and "" or "s")
+        else
+            failures += 1
+
+            if reason == "GenerationChanged" then
+                failures = 0
+                task.wait(0.1)
+            elseif reason == "NoFreeSlot" then
+                farmStatusText = "No free pyramid slot"
+                return false
+            elseif failures >= 6 then
+                farmStatusText = "Place failed: " .. tostring(reason)
+                return false
+            end
+
+            task.wait(0.2)
+        end
+
+        task.wait(CONFIG.PlaceDelay)
+    end
+
+    return false
+end
+
+local function farmLoop()
+    while not State.Destroyed do
+        if not State.AutoFarm then
+            task.wait(0.15)
+            continue
+        end
+
+        local current, maximum = waitForCapacity(2)
+
+        if current == nil or maximum == nil then
+            farmStatusText = "Waiting for capacity UI..."
+            task.wait(0.5)
+            continue
+        end
+
+        if current < maximum then
+            pickupUntilFull()
+        end
+
+        if not State.AutoFarm or State.Destroyed then
+            continue
+        end
+
+        current = select(1, readCapacity())
+        if current ~= nil and current > 0 then
+            placeUntilEmpty()
+        end
+
+        task.wait(CONFIG.BetweenTrips)
+    end
+end
+
+--////////////////////////////////////////////////////////////
+-- Auto upgrades
+--////////////////////////////////////////////////////////////
+
+local upgradeChoices = {
+    {
+        id = "placementRange",
+        stateKey = "UpgradePlacementRange",
+        display = "Placement Range",
+    },
+    {
+        id = "bulkPlace",
+        stateKey = "UpgradeBulkPlace",
+        display = "Bulk Place",
+    },
+    {
+        id = "bulkPickup",
+        stateKey = "UpgradeBulkPickup",
+        display = "Bulk Pickup",
+    },
+}
+
+local function getUpgradeLevel(id)
+    return UpgradeLevels.fromPlayer(player, id)
+end
+
+local function getUpgradeMax(id)
+    local def = UpgradeCatalog.ById[id]
+    return def and def.MaxLevel or 0
+end
+
+local function attemptUpgrade(choice)
+    local level = getUpgradeLevel(choice.id)
+    local maximum = getUpgradeMax(choice.id)
+
+    if maximum > 0 and level >= maximum then
+        return "MAX"
+    end
+
+    local success, result = pcall(function()
+        return PurchaseUpgradeRF:InvokeServer(choice.id)
+    end)
+
+    if not success then
+        return "Invoke error"
+    end
+
+    if type(result) == "table" then
+        if result.ok == true then
+            return "Purchased"
+        end
+        return tostring(result.reason or "Rejected")
+    end
+
+    -- The attribute is server replicated, so even if the RF returns nil,
+    -- the level display below will update when a purchase succeeds.
+    return result == nil and "Requested" or tostring(result)
+end
+
+local function upgradeLoop()
+    while not State.Destroyed do
+        if not State.AutoUpgrades then
+            upgradeStatusText = "Idle"
+            task.wait(0.2)
+            continue
+        end
+
+        local attemptedAny = false
+
+        for _, choice in ipairs(upgradeChoices) do
+            if State.Destroyed or not State.AutoUpgrades then
+                break
+            end
+
+            if State[choice.stateKey] then
+                local level = getUpgradeLevel(choice.id)
+                local maximum = getUpgradeMax(choice.id)
+
+                if level < maximum then
+                    attemptedAny = true
+                    upgradeStatusText = string.format("%s %d/%d...", choice.display, level, maximum)
+                    local result = attemptUpgrade(choice)
+                    upgradeStatusText = choice.display .. ": " .. result
+                    task.wait(CONFIG.UpgradeAttemptDelay)
+                end
+            end
+        end
+
+        if not attemptedAny then
+            upgradeStatusText = "Selected upgrades maxed / none selected"
+        end
+
+        task.wait(CONFIG.UpgradeCycleDelay)
+    end
+end
+
+--////////////////////////////////////////////////////////////
+-- Simple UI
+--////////////////////////////////////////////////////////////
+
+local old = playerGui:FindFirstChild("PyramidDevFarmUI")
+if old then
+    old:Destroy()
+end
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "PyramidDevFarmUI"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = false
+gui.Parent = playerGui
+
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.fromOffset(330, 390)
+main.AnchorPoint = Vector2.new(0.5, 0.5)
+main.Position = UDim2.fromScale(0.5, 0.5)
+main.BackgroundColor3 = Color3.fromRGB(22, 24, 29)
+main.BorderSizePixel = 0
+main.Parent = gui
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 10)
+mainCorner.Parent = main
+
+local stroke = Instance.new("UIStroke")
+stroke.Thickness = 1
+stroke.Transparency = 0.5
+stroke.Color = Color3.fromRGB(110, 118, 135)
+stroke.Parent = main
+
+local titleBar = Instance.new("Frame")
+titleBar.Name = "TitleBar"
+titleBar.Size = UDim2.new(1, 0, 0, 42)
+titleBar.BackgroundTransparency = 1
+titleBar.Parent = main
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -50, 1, 0)
+title.Position = UDim2.fromOffset(14, 0)
+title.BackgroundTransparency = 1
+title.Font = Enum.Font.GothamBold
+title.Text = "Pyramid Dev Farm"
+title.TextColor3 = Color3.fromRGB(240, 242, 247)
+title.TextSize = 17
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Parent = titleBar
+
+local close = Instance.new("TextButton")
+close.Size = UDim2.fromOffset(30, 30)
+close.Position = UDim2.new(1, -37, 0, 6)
+close.BackgroundColor3 = Color3.fromRGB(45, 48, 56)
+close.BorderSizePixel = 0
+close.Font = Enum.Font.GothamBold
+close.Text = "×"
+close.TextColor3 = Color3.fromRGB(230, 230, 235)
+close.TextSize = 20
+close.AutoButtonColor = false
+close.Parent = titleBar
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 7)
+closeCorner.Parent = close
+
+local content = Instance.new("Frame")
+content.Size = UDim2.new(1, -24, 1, -54)
+content.Position = UDim2.fromOffset(12, 46)
+content.BackgroundTransparency = 1
+content.Parent = main
+
+local layout = Instance.new("UIListLayout")
+layout.FillDirection = Enum.FillDirection.Vertical
+layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+layout.Padding = UDim.new(0, 7)
+layout.Parent = content
+
+local function makeInfoLabel(textValue, height)
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 0, height or 24)
+    label.BackgroundColor3 = Color3.fromRGB(30, 33, 40)
+    label.BorderSizePixel = 0
+    label.Font = Enum.Font.Gotham
+    label.Text = textValue
+    label.TextColor3 = Color3.fromRGB(207, 211, 221)
+    label.TextSize = 13
+    label.TextWrapped = true
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = content
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 7)
+    corner.Parent = label
+
+    local pad = Instance.new("UIPadding")
+    pad.PaddingLeft = UDim.new(0, 10)
+    pad.PaddingRight = UDim.new(0, 10)
+    pad.Parent = label
+
+    return label
+end
+
+local capacityInfo = makeInfoLabel("Capacity: waiting...", 28)
+local farmInfo = makeInfoLabel("Farm: Idle", 34)
+local upgradeInfo = makeInfoLabel("Upgrades: Idle", 34)
+
+local toggleObjects = {}
+
+local function makeToggle(labelText, stateKey, indent)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 38)
+    row.BackgroundColor3 = Color3.fromRGB(30, 33, 40)
+    row.BorderSizePixel = 0
+    row.Parent = content
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 7)
+    corner.Parent = row
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -75, 1, 0)
+    label.Position = UDim2.fromOffset(indent and 22 or 10, 0)
+    label.BackgroundTransparency = 1
+    label.Font = indent and Enum.Font.Gotham or Enum.Font.GothamMedium
+    label.Text = labelText
+    label.TextColor3 = Color3.fromRGB(225, 227, 233)
+    label.TextSize = indent and 12 or 13
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = row
+
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.fromOffset(56, 26)
+    button.Position = UDim2.new(1, -64, 0.5, -13)
+    button.BorderSizePixel = 0
+    button.Font = Enum.Font.GothamBold
+    button.TextSize = 11
+    button.AutoButtonColor = false
+    button.Parent = row
+
+    local bCorner = Instance.new("UICorner")
+    bCorner.CornerRadius = UDim.new(1, 0)
+    bCorner.Parent = button
+
+    local function redraw()
+        local enabled = State[stateKey]
+        button.Text = enabled and "ON" or "OFF"
+        button.BackgroundColor3 = enabled and Color3.fromRGB(66, 170, 105) or Color3.fromRGB(73, 77, 88)
+        button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    end
+
+    button.Activated:Connect(function()
+        State[stateKey] = not State[stateKey]
+        redraw()
+    end)
+
+    redraw()
+    toggleObjects[stateKey] = { redraw = redraw, label = label, button = button }
+    return row
+end
+
+makeToggle("Auto Farm", "AutoFarm", false)
+makeToggle("Auto Upgrades", "AutoUpgrades", false)
+makeToggle("↳ Placement Range", "UpgradePlacementRange", true)
+makeToggle("↳ Bulk Place", "UpgradeBulkPlace", true)
+makeToggle("↳ Bulk Pickup", "UpgradeBulkPickup", true)
+
+-- Dragging
+local dragging = false
+local dragStart = nil
+local startPos = nil
+local dragInput = nil
+
+titleBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = main.Position
+
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+titleBar.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging and dragStart and startPos then
+        local delta = input.Position - dragStart
+        main.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+close.Activated:Connect(function()
+    State.AutoFarm = false
+    State.AutoUpgrades = false
+    State.Destroyed = true
+    gui:Destroy()
+end)
+
+-- UI updater
+task.spawn(function()
+    while not State.Destroyed do
+        local current, maximum = readCapacity()
+        if current ~= nil and maximum ~= nil then
+            capacityInfo.Text = string.format("Capacity: %d/%d", current, maximum)
+        else
+            capacityInfo.Text = "Capacity: waiting for StrengthCounter..."
+        end
+
+        farmInfo.Text = "Farm: " .. farmStatusText
+        upgradeInfo.Text = "Upgrades: " .. upgradeStatusText
+
+        for _, choice in ipairs(upgradeChoices) do
+            local obj = toggleObjects[choice.stateKey]
+            if obj then
+                local level = getUpgradeLevel(choice.id)
+                local maximumLevel = getUpgradeMax(choice.id)
+                local prefix = choice.display == "Placement Range" and "↳ Placement Range" or ("↳ " .. choice.display)
+                obj.label.Text = string.format("%s  [%d/%d]", prefix, level, maximumLevel)
+            end
+        end
+
+        task.wait(0.20)
+    end
+end)
+
+-- Start workers
+task.spawn(farmLoop)
+task.spawn(upgradeLoop)
+
+print("[PyramidDevFarm v2] Loaded. All toggles default OFF.")
