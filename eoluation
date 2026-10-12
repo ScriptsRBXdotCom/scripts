@@ -1,0 +1,193 @@
+
+-- Rayfield Gen2 | Client Testing Menu
+
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+
+local player = Players.LocalPlayer
+local remotes = RS:WaitForChild("Remotes")
+
+local StrikeBatch = remotes:WaitForChild("StrikeBatch")
+local Grade = remotes:WaitForChild("Grade")
+local Rebirth = remotes:WaitForChild("Rebirth")
+
+local Rayfield = loadstring(game:HttpGet(
+    "https://sirius.menu/gen2"
+))()
+
+local window = Rayfield:CreateWindow({
+    name = "ScriptsRBX",
+    subtitle = "Win Pads | Training | Upgrades"
+})
+
+local tab = window:CreateTab({
+    name = "Auto Farm"
+})
+
+-- SETTINGS
+local selectedStage = 1
+local autoWin = false
+local autoStrike = false
+local autoGrade = false
+local autoRebirth = false
+
+local function getRoot()
+    local char = player.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getWinPad(stage)
+    local name = "wins pad stage " .. stage
+    local model = workspace:FindFirstChild(name)
+
+    if not model then
+        return nil
+    end
+
+    -- Find the actual tagged claim part first.
+    local CollectionService = game:GetService("CollectionService")
+
+    for _, part in ipairs(CollectionService:GetTagged("ClaimPlinth")) do
+        if part:IsDescendantOf(model)
+            and part:GetAttribute("Stage") == stage
+            and part:GetAttribute("Paid") == false
+            and part:IsA("BasePart") then
+            return part
+        end
+    end
+
+    -- Fallback to the stage's named Part.
+    return model:FindFirstChild("Part")
+end
+
+local function teleportToPad()
+    local root = getRoot()
+    local pad = getWinPad(selectedStage)
+
+    if not root or not pad then
+        warn("Win pad unavailable for stage " .. selectedStage)
+        return
+    end
+
+    local original = root.CFrame
+
+    root.CFrame = pad.CFrame + Vector3.new(0, 3, 0)
+
+    task.wait(1.5)
+
+    if getRoot() == root then
+        root.CFrame = original
+    end
+end
+
+-- WIN PADS
+tab:CreateSection({
+    name = "Win Pads"
+})
+
+local stages = {}
+
+for i = 1, 15 do
+    stages[i] = "Stage " .. i
+end
+
+tab:CreateDropdown({
+    name = "Select Stage",
+    description = "Stage must be unlocked",
+    options = stages,
+    value = "Stage 1",
+    callback = function(value)
+        selectedStage = tonumber(value:match("%d+")) or 1
+    end
+})
+
+tab:CreateToggle({
+    name = "Auto Win",
+    description = "Teleport to selected wins",
+    value = false,
+    callback = function(value)
+        autoWin = value
+
+        if value then
+            task.spawn(function()
+                while autoWin do
+                    pcall(teleportToPad)
+                    task.wait(0.1)
+                end
+            end)
+        end
+    end
+})
+
+-- TRAINING
+tab:CreateSection({
+    name = "Training"
+})
+
+tab:CreateToggle({
+    name = "Auto Strike",
+    description = "20 strikes per batch | 1 second interval",
+    value = false,
+    callback = function(value)
+        autoStrike = value
+
+        if value then
+            task.spawn(function()
+                while autoStrike do
+                    pcall(function()
+                        StrikeBatch:FireServer(20)
+                    end)
+
+                    task.wait(0.01)
+                end
+            end)
+        end
+    end
+})
+
+-- UPGRADES
+tab:CreateSection({
+    name = "Upgrades"
+})
+
+tab:CreateToggle({
+    name = "Auto Grade",
+    description = "Attempts grade every 10 seconds",
+    value = false,
+    callback = function(value)
+        autoGrade = value
+
+        if value then
+            task.spawn(function()
+                while autoGrade do
+                    pcall(function()
+                        Grade:InvokeServer()
+                    end)
+
+                    task.wait(10)
+                end
+            end)
+        end
+    end
+})
+
+tab:CreateToggle({
+    name = "Auto Rebirth",
+    description = "Attempts rebirth every 10 seconds",
+    value = false,
+    callback = function(value)
+        autoRebirth = value
+
+        if value then
+            task.spawn(function()
+                while autoRebirth do
+                    pcall(function()
+                        Rebirth:InvokeServer()
+                    end)
+
+                    task.wait(10)
+                end
+            end)
+        end
+    end
+})
