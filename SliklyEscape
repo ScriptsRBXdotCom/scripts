@@ -1,0 +1,288 @@
+-- Testing-server client panel. All automation starts OFF.
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local player = Players.LocalPlayer
+assert(player, "[FarmPanel] Requires client execution")
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
+if shared.FarmPanelStop then shared.FarmPanelStop() end
+if shared.WalkTestStop then shared.WalkTestStop() end
+
+local state = {farm = false, walk = false, rebirth = false, probe = true}
+local alive = true
+local attempt, queue, walkCharacter, oldTestMove
+local nextFarm, nextRebirth = 0, math.huge
+local connection
+local toggles = {}
+local confirmedIndex, lastLevel
+local failedStages = {}
+local lastOrder
+local successfulStages = {}
+local lastWins
+
+local function characterParts()
+    local character = player.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if humanoid and root and humanoid.Health > 0 then
+        return character, humanoid, root
+    end
+end
+
+local function clearWalk()
+    if walkCharacter then
+        walkCharacter:SetAttribute("TestMove", oldTestMove)
+        local humanoid = walkCharacter:FindFirstChildOfClass("Humanoid")
+        if humanoid then humanoid:Move(Vector3.zero, false) end
+    end
+    walkCharacter, oldTestMove = nil, nil
+end
+
+local function finishAttempt()
+    local current = attempt
+    attempt = nil
+    if current and player.Character == current.character and current.root.Parent then
+        current.root.AssemblyLinearVelocity = Vector3.zero
+        current.root.AssemblyAngularVelocity = Vector3.zero
+        current.character:PivotTo(current.origin)
+    end
+end
+
+local function stopAll()
+    state.farm, state.walk, state.rebirth = false, false, false
+    queue = nil
+    clearWalk()
+    finishAttempt()
+    for _, toggle in pairs(toggles) do toggle:Set(false, true) end
+    print("[FarmPanel] All automation stopped")
+end
+
+shared.FarmPanelStop = function()
+    stopAll()
+    alive = false
+    if connection then connection:Disconnect() end
+end
+
+local function buildQueue()
+    local world = workspace:FindFirstChild("World")
+    local course = world and world:FindFirstChild("Course")
+    local gui = player:FindFirstChild("PlayerGui")
+    local ui = gui and gui:FindFirstChild("SlinkyUI")
+    local bar = ui and ui:FindFirstChild("BottomBar")
+    local progress = bar and bar:FindFirstChild("Progress")
+    local label = progress and progress:FindFirstChild("Left")
+    local level = label and tonumber(label.Text:match("%d+"))
+    if not course or not level then return end
+    if lastLevel and level < lastLevel then
+        confirmedIndex = nil
+        failedStages = {}
+        successfulStages = {}
+    end
+    lastLevel = level
+    local stages = {}
+    for _, stage in ipairs(course:GetChildren()) do
+        local index = tonumber(stage.Name:match("^CP(%d+)$"))
+        if index then
+            local block = stage:FindFirstChild("StageBlock", true)
+            local requirement = block and tonumber(block:GetAttribute("Level"))
+            local pad
+            for _, obj in ipairs(stage:GetDescendants()) do
+                if obj:IsA("BasePart") and obj.Name == "WinStrip" and
+                    (not pad or obj.Position.Z < pad.Position.Z) then
+                    pad = obj
+                end
+            end
+            if pad then
+                table.insert(stages, {index = index, pad = pad, requirement = requirement})
+            end
+        end
+    end
+    table.sort(stages, function(a, b) return a.index < b.index end)
+    local base
+    for position, entry in ipairs(stages) do
+        if (entry.requirement and entry.requirement <= level) or
+            (confirmedIndex and entry.index <= confirmedIndex) then
+            base = position
+        end
+    end
+    if not base then
+        warn("[FarmPanel] No loaded unlocked or previously successful stage")
+        return
+    end
+    local result = {}
+    local included = {}
+    for _, offset in ipairs(state.probe and {2, 1, 0} or {0}) do
+        local entry = stages[base + offset]
+        if entry and entry.pad then
+            local failed = failedStages[entry.index]
+            -- Reconsider only when level or the successful frontier advances.
+            if not failed or level > failed.level or
+                (confirmedIndex or 0) > failed.frontier or
+                (successfulStages[entry.index] and os.clock() >= failed.retryAt) then
+                entry.testLevel = level
+                entry.frontier = confirmedIndex or 0
+                table.insert(result, entry)
+                included[entry.index] = true
+            end
+        end
+    end
+    -- Keep lower proven pads available if the highest remembered pad stops paying.
+    for position = #stages, 1, -1 do
+        local entry = stages[position]
+        local failed = failedStages[entry.index]
+        if successfulStages[entry.index] and not included[entry.index] and
+            (not failed or os.clock() >= failed.retryAt) then
+            entry.testLevel = level
+            entry.frontier = confirmedIndex or 0
+            table.insert(result, entry)
+        end
+    end
+    -- If every candidate is blocked, retry the baseline after a cooldown.
+    if #result == 0 then
+        local entry = stages[base]
+        local failed = failedStages[entry.index]
+        if not failed or os.clock() >= failed.retryAt then
+            entry.testLevel = level
+            entry.frontier = confirmedIndex or 0
+            table.insert(result, entry)
+        end
+    end
+    local order = {}
+    for _, entry in ipairs(result) do
+        table.insert(order, string.format("CP%02d (level %s)", entry.index, tostring(entry.requirement or "unknown")))
+    end
+    local description = string.format("[FarmPanel] Your level %d; attempt order: %s", level, table.concat(order, " -> "))
+    if description ~= lastOrder then
+        print(description)
+        lastOrder = description
+    end
+    if state.probe and not stages[base + 2] then
+        warn("[FarmPanel] Fewer than two later stages have loaded pads")
+    end
+    return result
+end
+
+local window = Rayfield:CreateWindow({name = "Course Test Panel", subtitle = "Testing server", sidebarLayout = true})
+local tab = window:CreateTab({name = "Automation"})
+toggles.farm = tab:CreateToggle({name = "Auto farm", value = false, forgetState = true,
+    callback = function(value)
+        state.farm = value
+        queue = nil
+        nextFarm = os.clock()
+        if not value then finishAttempt() end
+    end})
+tab:CreateToggle({name = "Try +2, then +1 stages", value = true, forgetState = true,
+    callback = function(value)
+        state.probe = value
+        queue = nil
+        finishAttempt()
+    end})
+toggles.walk = tab:CreateToggle({name = "Auto walk", value = false, forgetState = true,
+    callback = function(value)
+        state.walk = value
+        if not value then clearWalk() end
+    end})
+toggles.rebirth = tab:CreateToggle({name = "Auto rebirth — every 10 seconds", value = false, forgetState = true,
+    callback = function(value)
+        state.rebirth = value
+        nextRebirth = value and os.clock() + 10 or math.huge
+    end})
+tab:CreateButton({name = "Stop all", callback = stopAll})
+tab:CreateButton({name = "Retry forgotten stages", callback = function()
+    failedStages = {}
+    queue = nil
+    lastOrder = nil
+    print("[FarmPanel] Failure memory cleared")
+end})
+
+connection = RunService.RenderStepped:Connect(function()
+    if not alive then return end
+    local ok, err = pcall(function()
+        local now = os.clock()
+        local character, humanoid, root = characterParts()
+        if state.rebirth and now >= nextRebirth and not attempt and (not queue or #queue == 0) then
+            nextRebirth = now + 10
+            finishAttempt()
+            queue = nil
+            nextFarm = now + 2
+            local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+            local event = remotes and remotes:FindFirstChild("Rebirth")
+            if event and event:IsA("RemoteEvent") then
+                event:FireServer()
+                print("[FarmPanel] Rebirth requested (server decides eligibility)")
+            else
+                warn("[FarmPanel] Rebirth RemoteEvent missing")
+            end
+        end
+
+        if state.walk and character then
+            if walkCharacter ~= character then
+                clearWalk()
+                walkCharacter = character
+                oldTestMove = character:GetAttribute("TestMove")
+            end
+            -- Fixed world axis avoids direction feedback as the character turns.
+            local move = Vector3.new(math.floor(now / 0.75) % 2 == 0 and 1 or -1, 0, 0)
+            character:SetAttribute("TestMove", move)
+            humanoid:Move(move, false)
+        elseif walkCharacter then
+            clearWalk()
+        end
+
+        local stats = player:FindFirstChild("leaderstats")
+        local wins = stats and stats:FindFirstChild("Wins")
+        if wins and lastWins and wins.Value < lastWins then
+            -- A reset can occur before the level label refreshes.
+            finishAttempt()
+            queue = nil
+            confirmedIndex, lastLevel = nil, nil
+            successfulStages, failedStages = {}, {}
+            lastOrder = nil
+            nextFarm = now + 2
+            print("[FarmPanel] Wins reset detected; rebuilding stage progress")
+        end
+        if wins then lastWins = wins.Value end
+        if attempt then
+            if not state.farm or character ~= attempt.character or not wins then
+                finishAttempt()
+                queue = nil
+            elseif wins.Value > attempt.before then
+                confirmedIndex = math.max(confirmedIndex or 0, attempt.index)
+                successfulStages[attempt.index] = true
+                failedStages[attempt.index] = nil
+                print(string.format("[FarmPanel] CP%02d: Wins +%s", attempt.index, tostring(wins.Value - attempt.before)))
+                finishAttempt()
+                queue = nil
+                nextFarm = now + 0.35
+            elseif now >= attempt.deadline then
+                warn(string.format("[FarmPanel] CP%02d: no increase within 5 seconds", attempt.index))
+                failedStages[attempt.index] = {
+                    level = attempt.testLevel,
+                    frontier = attempt.frontier,
+                    retryAt = now + 15,
+                }
+                finishAttempt()
+                nextFarm = now + 2
+            end
+        elseif state.farm and character and wins and now >= nextFarm then
+            if not queue or #queue == 0 then queue = buildQueue() end
+            local entry = queue and table.remove(queue, 1)
+            if not entry or not entry.pad.Parent then
+                nextFarm = now + 3
+                return
+            end
+            attempt = {character = character, root = root, origin = character:GetPivot(),
+                before = wins.Value, index = entry.index, deadline = now + 5,
+                testLevel = entry.testLevel, frontier = entry.frontier}
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            character:PivotTo(entry.pad.CFrame * CFrame.new(0, entry.pad.Size.Y / 2 + 4, 0))
+            print(string.format("[FarmPanel] Trying CP%02d; requirement %s", entry.index, tostring(entry.requirement or "unknown")))
+        end
+    end)
+    if not ok then
+        warn("[FarmPanel] " .. tostring(err))
+        stopAll()
+    end
+end)
+print("[FarmPanel] Loaded; enable features using the toggles")
