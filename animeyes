@@ -1,0 +1,413 @@
+_G.StageFarm = false
+_G.AutoCombat = false
+
+if _G.TestFarmUI then
+    _G.TestFarmUI.running = false
+end
+
+local app = {
+    running = true,
+    win = false,
+    train = false,
+    rebirth = false,
+}
+_G.TestFarmUI = app
+
+local player = game:GetService("Players").LocalPlayer
+local RS = game:GetService("ReplicatedStorage")
+local client = player.PlayerScripts:WaitForChild("Client")
+local remotes = RS:WaitForChild("Remotes")
+
+local World = require(RS.Shared.Config.World)
+local Stages = require(RS.Shared.Config.Stages)
+local StageGate = require(RS.Shared.Logic.StageGate)
+local Enemies = require(client.Enemies)
+local Input = require(client.Input)
+local Gates = require(client.Gates)
+local Events = require(client.Events)
+
+local Rayfield = loadstring(
+    game:HttpGet("https://sirius.menu/gen2")
+)()
+
+local window = Rayfield:CreateWindow({
+    name = "Game Test Panel",
+    subtitle = "Stage Loop",
+    sidebarLayout = true,
+})
+
+local tab = window:CreateTab({name = "Automation"})
+
+local cleared = 0
+local attempted = 1
+local limit = World.STAGE_COUNT
+local pending
+local nextAction = 0
+local ready = {}
+local waveSince
+local waveStage
+local lastCharacter
+local deathRecorded = false
+
+local function num(name, fallback)
+    return tonumber(player:GetAttribute(name)) or fallback or 0
+end
+
+local function body()
+    local character = player.Character
+    local humanoid = character
+        and character:FindFirstChildOfClass("Humanoid")
+    local root = character
+        and character:FindFirstChild("HumanoidRootPart")
+
+    if lastCharacter ~= character then
+        lastCharacter = character
+        deathRecorded = false
+    end
+
+    if humanoid and root and humanoid.Health > 0
+        and not player:GetAttribute("Downed") then
+        return humanoid, root
+    end
+
+    if app.win and humanoid and not deathRecorded then
+        deathRecorded = true
+        limit = math.max(0, math.min(limit, attempted - 1))
+        cleared = 0
+        pending = nil
+        waveSince = nil
+        waveStage = nil
+        nextAction = os.clock() + 3
+        warn("Downed: lowering stage limit to", limit)
+    end
+end
+
+local function tp(position)
+    local humanoid, root = body()
+    if not humanoid then return false end
+
+    player.Character:PivotTo(CFrame.new(position))
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+    return true
+end
+
+local function canEnter(stage, world)
+    if stage > limit then return false end
+
+    local config = Stages.forWorld(world)[stage]
+    if not config or type(config.recommended) ~= "number" then
+        return false
+    end
+
+    if num("Chakra") < config.recommended then
+        return false
+    end
+
+    local best = world == 1
+        and "BestStage" or ("BestStage" .. world)
+
+    return StageGate.need(
+        world, stage, num(best), num("TotalWins")
+    ) == nil
+end
+
+Events.on("start", function(data)
+    if not app.running or not app.win then return end
+    if type(data) ~= "table"
+        or type(data.stage) ~= "number" then return end
+
+    attempted = data.stage
+    if data.stage == 1 then cleared = 0 end
+
+    if pending and pending.kind == "entry"
+        and pending.stage == data.stage then
+        pending = nil
+    end
+end)
+
+Events.on("clear", function(data)
+    if not app.running or not app.win then return end
+    if type(data) ~= "table"
+        or type(data.stage) ~= "number" then return end
+
+    cleared = math.max(cleared, data.stage)
+
+    if pending and pending.kind == "entry"
+        and pending.stage == data.stage then
+        pending = nil
+    end
+end)
+
+Events.on("reset", function()
+    if not app.running or not app.win then return end
+    cleared = 0
+    waveSince = nil
+    waveStage = nil
+end)
+
+local function attack(root)
+    local target
+    local nearest = math.huge
+
+    for _, enemy in pairs(Enemies.list()) do
+        if typeof(enemy.pos) == "Vector3" then
+            local offset = enemy.pos - root.Position
+            local distance = Vector3.new(
+                offset.X, 0, offset.Z
+            ).Magnitude
+
+            if distance < nearest then
+                nearest = distance
+                target = enemy
+            end
+        end
+    end
+
+    if not target then return end
+
+    for _, slot in ipairs({"attack", "E", "R"}) do
+        local ability = Input.ability(slot)
+        local now = os.clock()
+
+        if ability
+            and nearest <= (ability.range or 70)
+            and now >= (ready[slot] or 0) then
+
+            ready[slot] = now
+                + math.max(ability.cooldown or 1, 0.1)
+
+            remotes.Cast:FireServer(
+                slot, target.pos, target.id
+            )
+        end
+    end
+end
+
+local function tickFarm()
+    local humanoid, root = body()
+    if not humanoid then return end
+
+    local now = os.clock()
+    local world = num("RunWorld", 1)
+    local origin = World.origin(world)
+    local spawn = origin + World.SPAWN
+    local inWave = player:GetAttribute("InWave") == true
+
+    if pending and pending.kind == "pad" then
+        -- Let the game's Gates module return us to spawn.
+        -- Do not manually teleport to spawn or require Wins to change.
+        local offset = root.Position - spawn
+        local atSpawn = Vector3.new(
+            offset.X, 0, offset.Z
+        ).Magnitude < 15
+
+        if atSpawn and now >= pending.earliest then
+            warn("Returned to spawn — starting next run")
+            cleared = 0
+            pending = nil
+            waveSince = nil
+            waveStage = nil
+            nextAction = now + 1
+            return
+        end
+
+        if now > pending.deadline then
+            error("Pad did not return you to spawn")
+        end
+
+        -- One fallback request if automatic detection didn't act.
+        if now >= pending.retryAt and not pending.retried then
+            pending.retried = true
+            remotes.Pad:FireServer(pending.stage, "gold")
+        end
+        return
+    end
+
+    if inWave then
+        local stage = num("RunStage", attempted)
+
+        if pending and pending.kind == "entry"
+            and stage ~= pending.stage then
+            assert(now <= pending.deadline,
+                "Requested stage did not start")
+            return
+        end
+
+        pending = nil
+        attempted = stage
+
+        if waveStage ~= stage then
+            waveStage = stage
+            waveSince = now
+        end
+
+        assert(now - waveSince < 120,
+            "Wave exceeded 120 seconds")
+
+        attack(root)
+        return
+    end
+
+    waveSince = nil
+    waveStage = nil
+
+    if pending and pending.kind == "entry" then
+        if cleared >= pending.stage then
+            pending = nil
+        else
+            assert(now <= pending.deadline,
+                "Wave did not start after teleport")
+            return
+        end
+    end
+
+    if now < nextAction then return end
+
+    local nextStage = cleared + 1
+
+    if canEnter(nextStage, world) then
+        attempted = nextStage
+
+        pending = {
+            kind = "entry",
+            stage = nextStage,
+            deadline = now + 12,
+        }
+
+        local position = origin + Vector3.new(
+            0,
+            World.FLOOR_Y + 3,
+            World.stageStart(nextStage) - 8
+        )
+
+        if tp(position) then
+            warn("Entering stage", nextStage)
+        else
+            pending = nil
+        end
+
+    elseif cleared > 0 then
+        -- Wait briefly for the game's pad detector to see the clear.
+        if Gates.cleared() < cleared then
+            nextAction = now + 0.25
+            return
+        end
+
+        local stage = cleared
+        pending = {
+            kind = "pad",
+            stage = stage,
+            earliest = now + 0.5,
+            retryAt = now + 3,
+            deadline = now + 12,
+            retried = false,
+        }
+
+        local position = origin
+            + World.padPosition(stage, "gold")
+            + Vector3.new(0, 3, 0)
+
+        if tp(position) then
+            warn("At gold pad:", stage)
+        else
+            pending = nil
+        end
+
+    else
+        assert(limit > 0,
+            "Stage 1 was unsafe; train more and restart")
+        nextAction = now + 3
+    end
+end
+
+tab:CreateToggle({
+    name = "Auto Win",
+    callback = function(value)
+        app.win = value
+        pending = nil
+        nextAction = 0
+        waveSince = nil
+        waveStage = nil
+
+        if value then
+            limit = World.STAGE_COUNT
+            deathRecorded = false
+
+            if player:GetAttribute("InWave") then
+                cleared = Gates.cleared()
+                attempted = num("RunStage", cleared + 1)
+            else
+                cleared = 0
+                attempted = 1
+            end
+
+            warn("Looping Auto Win enabled")
+        end
+    end,
+})
+
+tab:CreateToggle({
+    name = "Auto Train",
+    callback = function(value)
+        app.train = value
+    end,
+})
+
+tab:CreateToggle({
+    name = "Auto Rebirth",
+    callback = function(value)
+        app.rebirth = value
+    end,
+})
+
+task.spawn(function()
+    while app.running do
+        if app.win then
+            local ok, err = pcall(tickFarm)
+            if not ok then
+                app.win = false
+                pending = nil
+                warn("Auto Win paused:", err)
+                warn("Toggle Auto Win off/on to retry")
+            end
+        end
+        task.wait(0.1)
+    end
+end)
+
+task.spawn(function()
+    while app.running do
+        if app.train and body() then
+            local ok, err = pcall(function()
+                remotes.Train:FireServer()
+            end)
+            if not ok then
+                app.train = false
+                warn("Auto Train paused:", err)
+            end
+        end
+        task.wait(0.2)
+    end
+end)
+
+task.spawn(function()
+    while app.running do
+        local safe = not player:GetAttribute("InWave")
+            and pending == nil
+            and (not app.win or cleared == 0)
+
+        if app.rebirth and safe and body()
+            and num("RebirthProgress") >= 1 then
+
+            local ok, err = pcall(function()
+                remotes.Rebirth:InvokeServer()
+            end)
+            if not ok then
+                app.rebirth = false
+                warn("Auto Rebirth paused:", err)
+            end
+        end
+        task.wait(1)
+    end
+end)
