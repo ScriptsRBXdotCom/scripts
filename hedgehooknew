@@ -1,0 +1,766 @@
+-- Client-side ring pickup test for your own experience.
+local BUILD = "2026-11-24.15"
+local Players = game:GetService("Players")
+local CollectionService = game:GetService("CollectionService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local player = Players.LocalPlayer
+
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
+if _G.RingFarmSession then
+    _G.RingFarmSession.stop()
+end
+
+local window = Rayfield:CreateWindow({
+    name = "ScriptsRBX.com",
+    subtitle = "Build " .. BUILD,
+    sidebarLayout = true,
+    theme = "cobalt",
+})
+local tab = window:CreateTab({ name = "Autofarm" })
+local progressionTab = window:CreateTab({ name = "Progression" })
+local enabled = false
+local closed = false
+local selectedArea = "1"
+local delaySeconds = 0.05
+local nextFinishAttempt = 0
+local resumeAt = 0
+local failures = 0
+local lastRing
+local lastRingTime = 0
+local lastCoursePosition = {}
+local dangerousUntil = setmetatable({}, { __mode = "k" })
+local deathConnection
+local approachTarget
+local approachHumanoid
+local approachRoot
+local visited = {}
+local logs = {}
+local connections = {}
+local toggle
+local areaDropdown
+local failedCourses = {}
+local switchingCourse = false
+local cycleStartCourse = "1"
+local resettingCycle = false
+local ringSettleFailures = setmetatable({}, { __mode = "k" })
+local ringRoute = {}
+local ringRouteArea
+local lastSuccessfulCourse
+local lastRequirementMessage
+local lastClaimAt = {}
+local CLAIM_COOLDOWN = 7
+local protectedCharacter
+local protectedRoot
+local savedTouch = setmetatable({}, { __mode = "k" })
+local savedAnchored
+
+local function log(message)
+    local line = os.date("%H:%M:%S") .. " " .. message
+    table.insert(logs, line)
+    if #logs > 100 then
+        table.remove(logs, 1)
+    end
+    print("[Ring Farm] " .. line)
+end
+
+local function speedValue()
+    local stats = player:FindFirstChild("leaderstats")
+    local speed = stats and stats:FindFirstChild("Speed")
+    return speed and tostring(speed.Value) or "unavailable"
+end
+
+local function getArea()
+    if selectedArea == "Lobby" then
+        local map = workspace:FindFirstChild("Map")
+        return map and map:FindFirstChild("Lobby")
+    end
+    local courses = workspace:FindFirstChild("Courses")
+    return courses and courses:FindFirstChild(selectedArea)
+end
+
+local function nearestRing(area, position)
+    local candidates = {}
+    for _, ring in ipairs(CollectionService:GetTagged("SonicRing")) do
+        if ring:IsA("BasePart") and ring:IsDescendantOf(area)
+            and (ring.LocalTransparencyModifier < 1 or failures > 0) and not visited[ring]
+            and os.clock() >= (dangerousUntil[ring] or 0) then
+            table.insert(candidates, ring)
+        end
+    end
+    if #candidates == 0 then
+        return nil
+    end
+
+    if ringRouteArea ~= area then
+        ringRoute = {}
+        ringRouteArea = area
+        local pads = workspace:FindFirstChild("FinishPads")
+        local pad = pads and pads:FindFirstChild(selectedArea)
+        local finish = pad and pad:FindFirstChild("Touch")
+        local cursor = position
+        if finish and finish:IsA("BasePart") then
+            local farthestDistance = -1
+            for _, ring in ipairs(candidates) do
+                local distance = (ring.Position - finish.Position).Magnitude
+                if distance > farthestDistance then
+                    farthestDistance = distance
+                    cursor = ring.Position
+                end
+            end
+        end
+        while #candidates > 0 do
+            local bestIndex = 1
+            local bestDistance = math.huge
+            for index, ring in ipairs(candidates) do
+                local distance = (ring.Position - cursor).Magnitude
+                if distance < bestDistance then
+                    bestIndex = index
+                    bestDistance = distance
+                end
+            end
+            local ring = table.remove(candidates, bestIndex)
+            table.insert(ringRoute, ring)
+            cursor = ring.Position
+        end
+        log("Built entrance-to-finish route with " .. #ringRoute .. " rings")
+    end
+
+    for _, ring in ipairs(ringRoute) do
+        if not visited[ring] and ring:IsDescendantOf(area)
+            and (ring.LocalTransparencyModifier < 1 or failures > 0)
+            and os.clock() >= (dangerousUntil[ring] or 0) then
+            return ring
+        end
+    end
+    return nil
+end
+
+local requiredSpeedByCourse = {
+    ["1"] = 10,
+    ["2"] = 16,
+    ["3"] = 24,
+    ["4"] = 34,
+    ["5"] = 44,
+    ["6"] = 64,
+    ["7"] = 84,
+    ["8"] = 124,
+    ["9"] = 164,
+    ["10"] = 214,
+}
+
+local function getRequiredSpeed(area)
+    for _, descendant in ipairs(area:GetDescendants()) do
+        if descendant:IsA("TextLabel") or descendant:IsA("TextButton") then
+            local number = tostring(descendant.Text):match("[Ss]peed%s+[Rr]equired:%s*([%d,%.]+)")
+            if number then
+                return tonumber((number:gsub(",", "")))
+            end
+        end
+    end
+    return requiredSpeedByCourse[selectedArea]
+end
+
+local function setRouteProtection(character, active)
+    if active then
+        if protectedCharacter and protectedCharacter ~= character then
+            setRouteProtection(protectedCharacter, false)
+        end
+        protectedCharacter = character
+        protectedRoot = character and character:FindFirstChild("HumanoidRootPart")
+        if protectedRoot and savedAnchored == nil then
+            savedAnchored = protectedRoot.Anchored
+        end
+        if protectedRoot then
+            protectedRoot.AssemblyLinearVelocity = Vector3.zero
+            protectedRoot.AssemblyAngularVelocity = Vector3.zero
+            protectedRoot.Anchored = true
+        end
+        for _, part in ipairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                if savedTouch[part] == nil then
+                    savedTouch[part] = part.CanTouch
+                end
+                part.CanTouch = false
+            end
+        end
+        return
+    end
+    if protectedCharacter then
+        for part, canTouch in pairs(savedTouch) do
+            if part.Parent and part:IsDescendantOf(protectedCharacter) then
+                part.CanTouch = canTouch
+            end
+            savedTouch[part] = nil
+        end
+    end
+    if protectedRoot and protectedRoot.Parent then
+        protectedRoot.Anchored = savedAnchored == true
+        protectedRoot.AssemblyLinearVelocity = Vector3.zero
+        protectedRoot.AssemblyAngularVelocity = Vector3.zero
+    end
+    protectedCharacter = nil
+    protectedRoot = nil
+    savedAnchored = nil
+end
+
+local function stop()
+    if closed then
+        return
+    end
+    closed = true
+    enabled = false
+    setRouteProtection(nil, false)
+    RunService:UnbindFromRenderStep("RingFarmApproach")
+    if approachHumanoid and approachHumanoid.Parent then
+        approachHumanoid:Move(Vector3.zero)
+    end
+    approachTarget = nil
+    if deathConnection then
+        deathConnection:Disconnect()
+    end
+    for _, connection in ipairs(connections) do
+        connection:Disconnect()
+    end
+    if not window.unloaded then
+        window:Unload()
+    end
+end
+_G.RingFarmSession = { stop = stop }
+
+RunService:BindToRenderStep("RingFarmApproach", Enum.RenderPriority.Last.Value, function(deltaTime)
+    if not approachTarget or not approachHumanoid or not approachRoot then
+        return
+    end
+    if closed or window.unloaded or not enabled or approachHumanoid.Health <= 0
+        or approachRoot.Parent ~= player.Character then
+        approachHumanoid:Move(Vector3.zero)
+        approachTarget = nil
+        return
+    end
+    local offset = approachTarget - approachRoot.Position
+    local horizontal = Vector3.new(offset.X, 0, offset.Z)
+    if horizontal.Magnitude < 2 then
+        approachHumanoid:Move(Vector3.zero)
+        return
+    end
+    local speed = math.max(approachHumanoid.WalkSpeed, 1)
+    local strength = math.min(1, 24 / speed, horizontal.Magnitude / (speed * math.max(deltaTime, 0.001) * 2))
+    approachHumanoid:Move(horizontal.Unit * strength, false)
+end)
+
+local options = {}
+local courses = workspace:FindFirstChild("Courses")
+if courses then
+    for _, course in ipairs(courses:GetChildren()) do
+        table.insert(options, course.Name)
+    end
+end
+table.sort(options, function(a, b)
+    return (tonumber(a) or math.huge) < (tonumber(b) or math.huge)
+end)
+table.insert(options, "Lobby")
+selectedArea = options[1]
+
+areaDropdown = tab:CreateDropdown({
+    name = "Area",
+    options = options,
+    value = selectedArea,
+    callback = function(value)
+        selectedArea = value
+        if not switchingCourse then
+            failedCourses = {}
+            cycleStartCourse = value
+        end
+        approachTarget = nil
+        if approachHumanoid and approachHumanoid.Parent then
+            approachHumanoid:Move(Vector3.zero)
+        end
+        visited = {}
+        ringRoute = {}
+        ringRouteArea = nil
+        nextFinishAttempt = 0
+        failures = 0
+        resumeAt = 0
+        log("Selected area " .. tostring(value))
+    end,
+})
+
+local function switchCourse(courseNumber, direction)
+    switchingCourse = true
+    areaDropdown:Set(tostring(courseNumber))
+    switchingCourse = false
+    log("Trying " .. direction .. " course " .. courseNumber)
+end
+
+local function selectNextCourse(failedCourse)
+    local current = tonumber(selectedArea)
+    if not current then
+        return false
+    end
+    failedCourses[tostring(failedCourse or current)] = true
+    local nextCourse
+    for _, option in ipairs(options) do
+        local courseNumber = tonumber(option)
+        if courseNumber and not failedCourses[tostring(courseNumber)] then
+            if courseNumber > current and (not nextCourse or courseNumber < nextCourse) then
+                nextCourse = courseNumber
+            end
+        end
+    end
+    if nextCourse then
+        switchCourse(nextCourse, "next")
+        return true
+    end
+    return false
+end
+
+local function returnToCycleStart()
+    failedCourses = {}
+    switchingCourse = true
+    areaDropdown:Set(tostring(cycleStartCourse))
+    switchingCourse = false
+    log("Returning to cycle start course " .. tostring(cycleStartCourse))
+end
+tab:CreateSlider({
+    name = "Teleport interval",
+    range = { 0.05, 1 },
+    increment = 0.01,
+    value = delaySeconds,
+    suffix = "s",
+    callback = function(value)
+        delaySeconds = value
+    end,
+})
+toggle = tab:CreateToggle({
+    name = "Autofarm",
+    value = false,
+    forgetState = true,
+    callback = function(value)
+        enabled = value
+        if not value then
+            setRouteProtection(nil, false)
+            approachTarget = nil
+            if approachHumanoid and approachHumanoid.Parent then
+                approachHumanoid:Move(Vector3.zero)
+            end
+        end
+        if value then
+            visited = {}
+            cycleStartCourse = selectedArea
+            failedCourses = {}
+            resumeAt = 0
+            nextFinishAttempt = 0
+        end
+        log(value and "Started" or "Stopped")
+    end,
+})
+tab:CreateButton({ name = "Stop and close", callback = stop })
+
+local function watchCharacter(character)
+    if deathConnection then
+        deathConnection:Disconnect()
+        deathConnection = nil
+    end
+    visited = {}
+    resumeAt = os.clock() + 0.75
+    nextFinishAttempt = 0
+    log("Respawn detected; waiting for living character")
+    task.spawn(function()
+        local humanoid = character:WaitForChild("Humanoid", 10)
+        if closed or window.unloaded or player.Character ~= character or not humanoid then
+            return
+        end
+        deathConnection = humanoid.Died:Connect(function()
+            if lastRing and os.clock() - lastRingTime < 1 then
+                dangerousUntil[lastRing] = os.clock() + 30
+                log("Pausing visits to the last ring for 30 seconds after death")
+            end
+            visited = {}
+            log("Character died; Autofarm will resume after respawn")
+            if enabled then
+                if resettingCycle then
+                    resettingCycle = false
+                elseif not selectNextCourse(selectedArea) then
+                    returnToCycleStart()
+                end
+                task.spawn(function()
+                    for _, delaySeconds in ipairs({ 0, 0.15, 0.4, 0.8, 1.4 }) do
+                        if delaySeconds > 0 then
+                            task.wait(delaySeconds)
+                        end
+                        if player.Character ~= character then
+                            return
+                        end
+                        local currentCore = ReplicatedStorage:FindFirstChild("Core")
+                        local currentRemotes = currentCore and currentCore:FindFirstChild("Remotes")
+                        local session = currentRemotes and currentRemotes:FindFirstChild("Session")
+                        if session and session:IsA("RemoteEvent") then
+                            session:FireServer({ Action = "DeclineRevive" })
+                        end
+                    end
+                    log("Sent revive decline requests")
+                end)
+            end
+        end)
+    end)
+end
+table.insert(connections, player.CharacterAdded:Connect(watchCharacter))
+if player.Character then
+    watchCharacter(player.Character)
+end
+local core = ReplicatedStorage:FindFirstChild("Core")
+local remotes = core and core:FindFirstChild("Remotes")
+local reset = remotes and remotes:FindFirstChild("RingsReset")
+if reset and reset:IsA("RemoteEvent") then
+    table.insert(connections, reset.OnClientEvent:Connect(function()
+        visited = {}
+        log("Server ring reset received")
+    end))
+end
+
+local automaticActions = {
+    {
+        name = "Auto farm speed",
+        tab = tab,
+        remote = "Stride",
+        interval = 0.12,
+        arguments = {},
+        enabled = false,
+        nextRun = 0,
+        lastLog = 0,
+    },
+    {
+        name = "Auto evolve (10s)",
+        tab = progressionTab,
+        remote = "Forms",
+        interval = 10,
+        arguments = { { Action = "Evolve" } },
+        enabled = false,
+        nextRun = 0,
+    },
+    {
+        name = "Auto rebirth (15s)",
+        tab = progressionTab,
+        remote = "Rebirth",
+        interval = 15,
+        arguments = {},
+        enabled = false,
+        nextRun = 0,
+    },
+}
+
+for _, action in ipairs(automaticActions) do
+    action.tab:CreateToggle({
+        name = action.name,
+        value = false,
+        forgetState = true,
+        callback = function(value)
+            action.enabled = value
+            action.nextRun = value and 0 or math.huge
+            log(action.name .. (value and " enabled" or " disabled"))
+        end,
+    })
+end
+
+task.spawn(function()
+    while not closed and not window.unloaded do
+        for _, action in ipairs(automaticActions) do
+            if action.enabled and os.clock() >= action.nextRun then
+                action.nextRun = os.clock() + action.interval
+                local ok, problem = pcall(function()
+                    local currentCore = ReplicatedStorage:FindFirstChild("Core")
+                    local currentRemotes = currentCore and currentCore:FindFirstChild("Remotes")
+                    local remote = currentRemotes and currentRemotes:FindFirstChild(action.remote)
+                    assert(remote and remote:IsA("RemoteEvent"), action.remote .. " remote unavailable")
+                    remote:FireServer(table.unpack(action.arguments))
+                end)
+                if ok then
+                    if os.clock() - (action.lastLog or -math.huge) >= 5 then
+                        action.lastLog = os.clock()
+                        log(action.name .. " request sent")
+                    end
+                else
+                    action.nextRun = os.clock() + math.max(3, action.interval)
+                    log(action.name .. " request failed: " .. tostring(problem))
+                end
+            end
+        end
+        task.wait(0.05)
+    end
+end)
+
+local function getFinishTouch(courseName)
+    local pads = workspace:FindFirstChild("FinishPads")
+    local pad = pads and pads:FindFirstChild(courseName)
+    local touch = pad and pad:FindFirstChild("Touch")
+    if touch and touch:IsA("BasePart") then
+        return touch
+    end
+
+    local streamPosition = lastCoursePosition[courseName]
+    if streamPosition then
+        log("Finish pad is streamed out; requesting the end of course " .. courseName)
+        pcall(player.RequestStreamAroundAsync, player, streamPosition, 1)
+    end
+
+    local deadline = os.clock() + 1
+    repeat
+        RunService.Heartbeat:Wait()
+        pads = workspace:FindFirstChild("FinishPads")
+        pad = pads and pads:FindFirstChild(courseName)
+        touch = pad and pad:FindFirstChild("Touch")
+    until touch or os.clock() >= deadline or closed or window.unloaded
+        or not enabled or selectedArea ~= courseName
+
+    return touch and touch:IsA("BasePart") and touch or nil
+end
+
+local function approachFinish(area, character, root, humanoid)
+    local course = selectedArea
+    local points = course == "1" and { 370, 380, 390, 395 } or { 620, 650, 680, 710, 738 }
+    local track = area:FindFirstChild("Track")
+    assert(track, "Course " .. course .. " track is unavailable")
+    local parameters = RaycastParams.new()
+    parameters.FilterType = Enum.RaycastFilterType.Include
+    parameters.FilterDescendantsInstances = { track }
+    log("Walking Course " .. course .. " finish approach")
+    for index, x in ipairs(points) do
+        if closed or window.unloaded or not enabled or selectedArea ~= course
+            or player.Character ~= character or humanoid.Health <= 0 then
+            humanoid:Move(Vector3.zero)
+            return false
+        end
+        local hit = workspace:Raycast(Vector3.new(x, 150, 4), Vector3.new(0, -200, 0), parameters)
+        assert(hit, "Course " .. course .. " track surface unavailable at X=" .. x)
+        local destination = hit.Position + Vector3.new(0, humanoid.HipHeight + root.Size.Y / 2, 0)
+        if index == 1 then
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.CFrame = CFrame.new(destination)
+            RunService.Heartbeat:Wait()
+        else
+            approachHumanoid = humanoid
+            approachRoot = root
+            approachTarget = destination
+            local deadline = os.clock() + 6
+            repeat
+                RunService.Heartbeat:Wait()
+            until (root.Position - destination).Magnitude < 6 or os.clock() >= deadline
+                or closed or window.unloaded or not enabled or selectedArea ~= course
+                or player.Character ~= character or humanoid.Health <= 0
+            approachTarget = nil
+            humanoid:Move(Vector3.zero)
+            if closed or window.unloaded or not enabled or selectedArea ~= course
+                or player.Character ~= character or humanoid.Health <= 0
+                or (root.Position - destination).Magnitude >= 6 then
+                humanoid:Move(Vector3.zero)
+                log("Finish approach interrupted at X=" .. x
+                    .. " | Position " .. tostring(root.Position)
+                    .. " | Target " .. tostring(destination)
+                    .. " | Distance " .. string.format("%.2f", (root.Position - destination).Magnitude)
+                    .. " | Health " .. tostring(humanoid.Health)
+                    .. " | WalkSpeed " .. tostring(humanoid.WalkSpeed))
+                return false
+            end
+        end
+    end
+    humanoid:Move(Vector3.zero)
+    return true
+end
+
+task.spawn(function()
+    local waiting = false
+    while not closed and not window.unloaded do
+        if enabled and os.clock() >= resumeAt then
+            local ok, problem = pcall(function()
+                local character = player.Character
+                local root = character and character:FindFirstChild("HumanoidRootPart")
+                local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                local area = getArea()
+                if not root or not humanoid or humanoid.Health <= 0 or not area then
+                    return
+                end
+                local requiredSpeed = getRequiredSpeed(area)
+                if requiredSpeed and humanoid.WalkSpeed + 0.01 < requiredSpeed then
+                    local requirementKey = selectedArea .. ":" .. requiredSpeed
+                    if lastRequirementMessage ~= requirementKey then
+                        lastRequirementMessage = requirementKey
+                        log("Course " .. selectedArea .. " requires movement speed " .. requiredSpeed
+                            .. "; current movement speed is " .. string.format("%.1f", humanoid.WalkSpeed))
+                    end
+                    local fallbackCourse = lastSuccessfulCourse or cycleStartCourse
+                    if tostring(fallbackCourse) ~= selectedArea then
+                        switchCourse(tonumber(fallbackCourse), "last successful")
+                        local claimedAt = lastClaimAt[tostring(fallbackCourse)]
+                        resumeAt = math.max(resumeAt, os.clock() + CLAIM_COOLDOWN,
+                            claimedAt and claimedAt + CLAIM_COOLDOWN or 0)
+                        log("Course " .. tostring(fallbackCourse)
+                            .. " is the highest unlocked course; waiting before retrying it")
+                    else
+                        resumeAt = math.max(resumeAt, os.clock() + 1)
+                    end
+                    return
+                end
+                lastRequirementMessage = nil
+                local ring = nearestRing(area, root.Position)
+                if not ring then
+                    if selectedArea ~= "Lobby" and os.clock() >= nextFinishAttempt then
+                        setRouteProtection(nil, false)
+                        RunService.Heartbeat:Wait()
+                        local touch = getFinishTouch(selectedArea)
+                        if not touch then
+                            local unavailableCourse = selectedArea
+                            log("Finish pad is unavailable for course " .. unavailableCourse)
+                            if not selectNextCourse(unavailableCourse) then
+                                returnToCycleStart()
+                                resettingCycle = true
+                                log("No later finish pad is available; resetting character")
+                                task.defer(function()
+                                    if player.Character == character and humanoid.Health > 0 then
+                                        humanoid.Health = 0
+                                    end
+                                end)
+                            end
+                            return
+                        end
+                        if (selectedArea == "1" or selectedArea == "2")
+                            and not approachFinish(area, character, root, humanoid) then
+                            local failedApproachCourse = selectedArea
+                            if not selectNextCourse(failedApproachCourse) then
+                                returnToCycleStart()
+                                resettingCycle = true
+                                log("Finish approach failed on the highest course; resetting character")
+                                task.defer(function()
+                                    if player.Character == character and humanoid.Health > 0 then
+                                        humanoid.Health = 0
+                                    end
+                                end)
+                            end
+                            return
+                        end
+                        local stats = player:FindFirstChild("leaderstats")
+                        local wins = stats and stats:FindFirstChild("Wins")
+                        local beforeWins = wins and wins.Value
+                        local attemptArea = selectedArea
+                        nextFinishAttempt = os.clock() + 3
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.AssemblyAngularVelocity = Vector3.zero
+                        local landing = touch.CFrame * CFrame.new(0,
+                            touch.Size.Y / 2 + humanoid.HipHeight + root.Size.Y / 2, 0)
+                        -- Separate from the pad before landing again to create a fresh touch.
+                        root.CFrame = landing + Vector3.new(0, 6, 0)
+                        RunService.Heartbeat:Wait()
+                        if closed or window.unloaded or not enabled or selectedArea ~= attemptArea
+                            or player.Character ~= character or humanoid.Health <= 0 then
+                            return
+                        end
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.CFrame = landing
+                        log("Reached finish pad for course " .. attemptArea)
+                        local deadline = os.clock() + 0.25
+                        repeat
+                            RunService.Heartbeat:Wait()
+                        until os.clock() >= deadline or not enabled or closed or window.unloaded
+                            or selectedArea ~= attemptArea or player.Character ~= character
+                            or humanoid.Health <= 0 or (wins and beforeWins and wins.Value > beforeWins)
+                        if closed or window.unloaded or not enabled or selectedArea ~= attemptArea then
+                            return
+                        end
+                        local afterWins = wins and wins.Value
+                        log("Finish result: Wins " .. tostring(beforeWins) .. " -> " .. tostring(afterWins))
+                        if player.Character ~= character or humanoid.Health <= 0 then
+                            log("Character died or respawned during finish attempt")
+                        elseif beforeWins and afterWins and afterWins > beforeWins then
+                            failures = 0
+                            failedCourses = {}
+                            lastSuccessfulCourse = attemptArea
+                            lastClaimAt[attemptArea] = os.clock()
+                            visited = {}
+                            resumeAt = lastClaimAt[attemptArea] + CLAIM_COOLDOWN
+                            nextFinishAttempt = 0
+                            log("Successful claim; course " .. attemptArea
+                                .. " will restart after the server claim cooldown")
+                        else
+                            failures = failures + 1
+                            visited = {}
+                            if not selectNextCourse(attemptArea) then
+                                returnToCycleStart()
+                                resettingCycle = true
+                                log("Highest available course failed; resetting character for a fresh cycle")
+                                task.defer(function()
+                                    if player.Character == character and humanoid.Health > 0 then
+                                        humanoid.Health = 0
+                                    end
+                                end)
+                            end
+                        end
+                        return
+                    end
+                    if not waiting then
+                        log("Waiting for fresh loaded rings or a ring reset")
+                        waiting = true
+                    end
+                    return
+                end
+                waiting = false
+                if selectedArea == "3" or selectedArea == "4" then
+                    setRouteProtection(character, true)
+                else
+                    setRouteProtection(nil, false)
+                end
+                visited[ring] = true
+                local before = speedValue()
+                local target = ring.Position
+                lastCoursePosition[selectedArea] = target
+                lastRing = ring
+                lastRingTime = os.clock()
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                local height = math.min(3, ring.Size.X * 0.5 + 1.5)
+                root.CFrame = CFrame.new(target + Vector3.new(0, height, 0))
+                log("Visited " .. ring:GetFullName() .. " at " .. tostring(target))
+                local deadline = os.clock() + delaySeconds
+                repeat
+                    RunService.Heartbeat:Wait()
+                until os.clock() >= deadline or not enabled or closed or window.unloaded
+                    or player.Character ~= character or humanoid.Health <= 0
+                if closed or window.unloaded then
+                    return
+                end
+                local arrivalDistance = (root.Position - target).Magnitude
+                if player.Character == character and humanoid.Health > 0
+                    and arrivalDistance > math.max(6, ring.Size.X * 0.5 + 3) then
+                    local settleFailures = (ringSettleFailures[ring] or 0) + 1
+                    ringSettleFailures[ring] = settleFailures
+                    if settleFailures < 2 then
+                        visited[ring] = nil
+                        resumeAt = os.clock() + 0.05
+                        log("Teleport did not settle at ring; one fast retry | Distance "
+                            .. string.format("%.2f", arrivalDistance))
+                    else
+                        log("Skipping ring after two snapbacks | Distance "
+                            .. string.format("%.2f", arrivalDistance))
+                    end
+                    return
+                end
+                ringSettleFailures[ring] = nil
+                log("Speed " .. before .. " -> " .. speedValue()
+                    .. " | Distance " .. string.format("%.2f", arrivalDistance)
+                    .. " | Health " .. tostring(humanoid.Health))
+            end)
+            if not ok then
+                approachTarget = nil
+                local character = player.Character
+                local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                if humanoid then
+                    humanoid:Move(Vector3.zero)
+                end
+                resumeAt = os.clock() + 3
+                log("Retrying in 3 seconds after error: " .. tostring(problem))
+            end
+        end
+        RunService.Heartbeat:Wait()
+    end
+    stop()
+end)
+log("Build " .. BUILD .. " ready. Select a course and enable Autofarm.")
