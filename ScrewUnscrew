@@ -1,0 +1,456 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
+local player = Players.LocalPlayer
+local screwRoom = ReplicatedStorage:WaitForChild("ScrewRoom")
+local remotes = screwRoom:WaitForChild("Remotes")
+local pullRemote = remotes:WaitForChild("Pull")
+local sellRemote = remotes:WaitForChild("Sell")
+local syncRemote = remotes:WaitForChild("Sync")
+local collectionActRemote = ReplicatedStorage
+    :WaitForChild("Collection")
+    :WaitForChild("Remotes")
+    :WaitForChild("Act")
+local Layout = require(screwRoom:WaitForChild("Layout"))
+local Constants = require(screwRoom:WaitForChild("Constants"))
+local sellBody = Workspace
+    :WaitForChild(Constants.ROOM_MODEL)
+    :WaitForChild(Constants.SELL_MACHINE)
+    :WaitForChild(Constants.SELL_BODY)
+
+local CONFIG = {
+    pullDelay = 0.12,
+    claimInterval = 2,
+    cycleDelay = 1,
+    reachRadius = 16,
+    teleportOffset = 5,
+    teleportSettle = 0.2,
+    sellTripSettle = 0.25,
+    sellOffset = 4,
+    pullsPerArea = 20,
+}
+
+-- Re-running the script stops the previous copy before starting a new one.
+if _G.ScrewRoomAutoTest then
+    _G.ScrewRoomAutoTest.stop()
+end
+
+local running = true
+local autoFarm = false
+local autoClaim = false
+local window
+local stats = {
+    pullAttempts = 0,
+    sellAttempts = 0,
+    claimAttempts = 0,
+    cycles = 0,
+    teleports = 0,
+}
+
+local lastSync
+local nextSyncAt = 0
+local syncBusy = false
+
+local function getSync()
+    if os.clock() < nextSyncAt or syncBusy then
+        return lastSync
+    end
+
+    syncBusy = true
+    local ok, result = pcall(function()
+        return syncRemote:InvokeServer()
+    end)
+    syncBusy = false
+    nextSyncAt = os.clock() + 0.25
+
+    if ok and typeof(result) == "table" then
+        lastSync = result
+    end
+    return lastSync
+end
+
+local controller = {}
+
+function controller.stop()
+    if not running then
+        return
+    end
+
+    running = false
+    autoFarm = false
+    autoClaim = false
+    if window and not window.unloaded then
+        window:Unload()
+    end
+    print(string.format(
+        "[ScrewRoomAutoTest] stopped | pulls=%d sells=%d claims=%d teleports=%d cycles=%d",
+        stats.pullAttempts,
+        stats.sellAttempts,
+        stats.claimAttempts,
+        stats.teleports,
+        stats.cycles
+    ))
+end
+
+function controller.status()
+    return {
+        running = running,
+        autoFarm = autoFarm,
+        autoClaim = autoClaim,
+        pullAttempts = stats.pullAttempts,
+        sellAttempts = stats.sellAttempts,
+        claimAttempts = stats.claimAttempts,
+        teleports = stats.teleports,
+        cycles = stats.cycles,
+    }
+end
+
+_G.ScrewRoomAutoTest = controller
+
+local screwIds = {}
+for id, screw in pairs(Layout.list) do
+    if typeof(id) == "number" and typeof(screw) == "table" then
+        table.insert(screwIds, id)
+    end
+end
+table.sort(screwIds)
+
+assert(#screwIds > 0, "ScrewRoom.Layout.list did not contain any numeric screw IDs")
+
+local Field
+do
+    local screwRoomScripts = player:WaitForChild("PlayerScripts"):WaitForChild("ScrewRoom", 10)
+    local fieldModule = screwRoomScripts and screwRoomScripts:FindFirstChild("Field")
+    if fieldModule and fieldModule:IsA("ModuleScript") then
+        local ok, result = pcall(require, fieldModule)
+        if ok then
+            Field = result
+        end
+    end
+end
+
+local function getCharacterParts()
+    local character = player.Character
+    if not character then
+        return nil, nil
+    end
+
+    return character:FindFirstChild("HumanoidRootPart"), character:FindFirstChild("Head")
+end
+
+local function screwIsAvailable(id)
+    if Field and typeof(Field.state) == "function" then
+        local ok, state = pcall(Field.state, id)
+        if ok then
+            return state == 0
+        end
+    end
+
+    return true
+end
+
+local function effectiveReachRadius()
+    local sync = getSync()
+    local serverReach = sync and sync.stats and sync.stats.reachDist
+    if typeof(serverReach) == "number" then
+        return math.min(CONFIG.reachRadius, math.max(serverReach - 0.5, 1))
+    end
+    return CONFIG.reachRadius
+end
+
+local function screwsInReach(position, attempted, radius)
+    local result = {}
+    for _, id in ipairs(screwIds) do
+        local screw = Layout.list[id]
+        if not attempted[id] and screwIsAvailable(id)
+            and (screw.pos - position).Magnitude <= radius then
+            table.insert(result, id)
+        end
+    end
+
+    table.sort(result, function(a, b)
+        return (Layout.list[a].pos - position).Magnitude
+            < (Layout.list[b].pos - position).Magnitude
+    end)
+    return result
+end
+
+local function nearestOutsideArea(position, attempted, radius)
+    local bestId
+    local bestDistance = math.huge
+    for _, id in ipairs(screwIds) do
+        local screw = Layout.list[id]
+        local distance = (screw.pos - position).Magnitude
+        if not attempted[id] and screwIsAvailable(id) and distance > radius
+            and distance < bestDistance then
+            bestId = id
+            bestDistance = distance
+        end
+    end
+    return bestId
+end
+
+local function nearestUnattempted(position, attempted)
+    local bestId
+    local bestDistance = math.huge
+    for _, id in ipairs(screwIds) do
+        local screw = Layout.list[id]
+        if not attempted[id] and screwIsAvailable(id) then
+            local distance = (screw.pos - position).Magnitude
+            if distance < bestDistance then
+                bestId = id
+                bestDistance = distance
+            end
+        end
+    end
+    return bestId
+end
+
+local function moveNearScrew(id)
+    local root = getCharacterParts()
+    local screw = Layout.list[id]
+    if not root or not screw then
+        return false
+    end
+
+    local normal = typeof(screw.normal) == "Vector3" and screw.normal or Vector3.yAxis
+    local destination = screw.pos + normal * CONFIG.teleportOffset
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+    root.CFrame = CFrame.new(destination) * root.CFrame.Rotation
+    stats.teleports += 1
+    task.wait(CONFIG.teleportSettle)
+    return true
+end
+
+local function sellAndReturn()
+    local root = getCharacterParts()
+    if not root or not sellBody:IsA("BasePart") then
+        return false
+    end
+
+    local returnCFrame = root.CFrame
+    local frontOffset = sellBody.Size.Z / 2 + CONFIG.sellOffset
+    local destination = sellBody.CFrame:PointToWorldSpace(Vector3.new(0, 0, -frontOffset))
+
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+    root.CFrame = CFrame.new(destination) * returnCFrame.Rotation
+    task.wait(CONFIG.sellTripSettle)
+
+    if not running or not autoFarm then
+        if root.Parent then
+            root.CFrame = returnCFrame
+        end
+        return false
+    end
+
+    stats.sellAttempts += 1
+    sellRemote:FireServer()
+    task.wait(CONFIG.sellTripSettle)
+
+    if root.Parent then
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+        root.CFrame = returnCFrame
+        task.wait(CONFIG.teleportSettle)
+    end
+    return true
+end
+
+task.spawn(function()
+    while running do
+        if not autoFarm then
+            task.wait(0.1)
+            continue
+        end
+
+        local attempted = {}
+
+        while running and autoFarm do
+            local root, head = getCharacterParts()
+            if not root or not head then
+                task.wait(0.5)
+                continue
+            end
+
+            local radius = effectiveReachRadius()
+            local areaOrigin = head.Position
+            local nearby = screwsInReach(areaOrigin, attempted, radius)
+            if #nearby == 0 then
+                local nextId = nearestUnattempted(head.Position, attempted)
+                if not nextId then
+                    break
+                end
+
+                if not moveNearScrew(nextId) then
+                    task.wait(0.5)
+                end
+                continue
+            end
+
+            local areaPulls = 0
+            for _, screwId in ipairs(nearby) do
+                if not running or not autoFarm then
+                    break
+                end
+
+                if areaPulls >= CONFIG.pullsPerArea then
+                    break
+                end
+
+                attempted[screwId] = true
+                if screwIsAvailable(screwId) then
+                    stats.pullAttempts += 1
+                    areaPulls += 1
+                    pullRemote:FireServer(screwId)
+                    task.wait(CONFIG.pullDelay)
+                end
+            end
+
+            if not running or not autoFarm then
+                break
+            end
+
+            if areaPulls > 0 then
+                sellAndReturn()
+            end
+
+            if areaPulls >= CONFIG.pullsPerArea then
+                local nextAreaId = nearestOutsideArea(areaOrigin, attempted, radius)
+                if nextAreaId then
+                    moveNearScrew(nextAreaId)
+                end
+            end
+        end
+
+        stats.cycles += 1
+        task.wait(CONFIG.cycleDelay)
+    end
+end)
+
+task.spawn(function()
+    while running do
+        if autoClaim then
+            stats.claimAttempts += 1
+            collectionActRemote:FireServer("claimAll", nil)
+            task.wait(CONFIG.claimInterval)
+        else
+            task.wait(0.1)
+        end
+    end
+end)
+
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
+window = Rayfield:CreateWindow({
+    name = "ScriptsRBX",
+    subtitle = "AutoFarm",
+    sidebarLayout = true,
+    theme = "cobalt",
+    showName = "Screw Test",
+})
+
+local automationTab = window:CreateTab({ name = "Automation" })
+local settingsTab = window:CreateTab({ name = "Settings" })
+
+local farmToggle = automationTab:CreateToggle({
+    name = "Auto Farm",
+    description = "Pull screws in moving batches and automatically sell.",
+    flag = "AutoFarm",
+    value = false,
+    forgetState = true,
+    callback = function(value)
+        autoFarm = value
+    end,
+})
+
+local claimToggle = automationTab:CreateToggle({
+    name = "Auto Claim Index",
+    description = "Periodically request every available collection reward.",
+    flag = "AutoClaimIndex",
+    value = false,
+    forgetState = true,
+    callback = function(value)
+        autoClaim = value
+    end,
+})
+
+automationTab:CreateButton({
+    name = "Stop All",
+    description = "Disable farming and index claiming.",
+    callback = function()
+        farmToggle:Set(false)
+        claimToggle:Set(false)
+    end,
+})
+
+settingsTab:CreateSlider({
+    name = "Pull Delay",
+    flag = "PullDelay",
+    range = { 0.05, 1 },
+    increment = 0.01,
+    value = CONFIG.pullDelay,
+    suffix = "s",
+    forgetState = true,
+    callback = function(value)
+        CONFIG.pullDelay = value
+    end,
+})
+
+settingsTab:CreateSlider({
+    name = "Reach Radius",
+    flag = "ReachRadius",
+    range = { 5, 50 },
+    increment = 1,
+    value = CONFIG.reachRadius,
+    suffix = " studs",
+    forgetState = true,
+    callback = function(value)
+        CONFIG.reachRadius = value
+    end,
+})
+
+settingsTab:CreateSlider({
+    name = "Claim Interval",
+    flag = "ClaimInterval",
+    range = { 0.5, 10 },
+    increment = 0.5,
+    value = CONFIG.claimInterval,
+    suffix = "s",
+    forgetState = true,
+    callback = function(value)
+        CONFIG.claimInterval = value
+    end,
+})
+
+settingsTab:CreateSlider({
+    name = "Pulls Per Area",
+    flag = "PullsPerArea",
+    range = { 5, 100 },
+    increment = 5,
+    value = CONFIG.pullsPerArea,
+    suffix = " pulls",
+    forgetState = true,
+    callback = function(value)
+        CONFIG.pullsPerArea = value
+    end,
+})
+
+settingsTab:CreateSlider({
+    name = "Teleport Offset",
+    flag = "TeleportOffset",
+    range = { 2, 10 },
+    increment = 0.5,
+    value = CONFIG.teleportOffset,
+    suffix = " studs",
+    forgetState = true,
+    callback = function(value)
+        CONFIG.teleportOffset = value
+    end,
+})
+
+print(string.format(
+    "[ScrewRoomAutoTest] ready with %d screw IDs; use the Rayfield toggles to start",
+    #screwIds
+))
